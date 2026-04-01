@@ -1,0 +1,142 @@
+zendesk:
+  subdomain: hevodata
+  email: ${ZENDESK_EMAIL}
+  api_token: ${ZENDESK_API_TOKEN}
+  # Groups to fetch tickets from (find IDs via GET /api/v2/groups.json)
+  groups:
+    - id: ${CHAT_L1_GROUP_ID}
+      name: "Chat L1 Support"
+    - id: ${GENERAL_ESCALATION_GROUP_ID}
+      name: "General Escalation"
+  ticket_status: closed
+  rate_limit:
+    # Zendesk standard plan: 700 req/min regular, 10 req/min for incremental export
+    regular_requests_per_minute: 400     # conservative ceiling for comments/metrics/write
+    export_requests_per_minute: 8        # incremental export (Zendesk limit: 10/min)
+
+llm:
+  provider: claude                        # claude | openai — change here, no code changes
+  claude:
+    model: claude-opus-4-6
+    api_key: ${ANTHROPIC_API_KEY}
+    max_tokens: 8000
+    temperature: 0
+    max_input_tokens: 90000               # truncate ticket JSON if larger
+  openai:
+    model: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+    max_tokens: 8000
+    temperature: 0
+    max_input_tokens: 90000
+  rate_limit:
+    requests_per_minute: 50
+    tokens_per_minute: 100000
+
+pipeline:
+  concurrent_fetches: 3                   # parallel Zendesk comment/metric calls
+  concurrent_evaluations: 2              # parallel LLM calls
+  queue_size: 50
+
+evaluation:
+  prompt_file: config/prompts/evaluation_v1.md
+  prompt_version: "v1"                   # bump this when prompt changes
+  skip_if_evaluated: true                # skip tickets already in DB with this prompt_version
+  sla:
+    # Optional: Zendesk custom field ID that holds the ticket's severity tier.
+    # If null, falls back to ticket.priority (normal / low / high / urgent).
+    severity_field_id: null
+    chat:
+      default:
+        frt_seconds: 30
+        ttr_minutes: 120
+      # Priority/severity-based overrides — uncomment and adjust to activate:
+      # urgent:
+      #   frt_seconds: 15
+      #   ttr_minutes: 60
+      # high:
+      #   frt_seconds: 20
+      #   ttr_minutes: 90
+    email:
+      default:
+        frt_minutes: 30
+        ttr_minutes: 2880
+        weekend_exclusion: true
+        timezone: Asia/Kolkata
+      # Priority/severity-based overrides — uncomment and adjust to activate:
+      # urgent:
+      #   frt_minutes: 15
+      #   ttr_minutes: 1440
+      # high:
+      #   frt_minutes: 20
+      #   ttr_minutes: 2160
+  # FRT/TTR rating breach thresholds
+  breach_minor_multiplier: 1.2           # within 20% of threshold = Rating 3 (vs Rating 2)
+
+zendesk_write_back:
+  enabled: false
+  # Fill in the Zendesk custom field IDs below.
+  # Set to null to skip writing that field.
+  custom_fields:
+    aggregate_score: 56518743015321                # decimal e.g. 3.6
+    evaluation_date: 56518747268633                # date: YYYY-MM-DD
+    evaluator_confidence: 56518867476377           # text: HIGH/MEDIUM/LOW
+    prompt_version: 56518883100313                 # text: v1, v2, etc.
+    frt_status: null                     # text: MET/BREACHED/NOT_APPLICABLE
+    ttr_status: null                     # text: MET/BREACHED/NOT_APPLICABLE
+    llm_provider: 56518921633177                   # text: e.g. claude-opus-4-6
+  # Optional per-metric rating fields (set field ID or leave null to skip)
+  metric_fields:
+    METRIC_1: 56518296947609
+    METRIC_2: 56518304309145
+    METRIC_3: 56518372532377
+    METRIC_4: 56518390157465
+    METRIC_5: 56518368133913
+    METRIC_6: 56518354572441
+    METRIC_7: 56518406390425
+    METRIC_8: 56518362410393
+    METRIC_9: 56518407920281
+    METRIC_10: 56518423367449
+    METRIC_11: 56518387776921
+    METRIC_12: 56518425291545
+    METRIC_13: 56518426112409
+    METRIC_14: 56518402706457
+    METRIC_15: 56518435278873
+    METRIC_16: 56518429764761
+    METRIC_17: 56518450393753
+    METRIC_18: 56518465738521
+
+state:
+  file: data/state.json
+  initial_fetch_from: "2025-01-01T00:00:00Z"   # used only on first-ever run
+
+output:
+  tickets_dir: data/tickets
+  evaluations_dir: data/evaluations
+  exports_dir: data/exports
+  database: data/evaluations.db
+  export_csv: true
+
+notifications:
+  method: email                          # email | slack_webhook
+  email:
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    use_tls: true
+    username: ${NOTIFICATION_EMAIL}
+    password: ${NOTIFICATION_EMAIL_PASSWORD}
+    from_address: ${NOTIFICATION_EMAIL}
+    # Slack channel email: Channel > Settings > Integrations > "Send emails to this channel"
+    to_address: ${SLACK_CHANNEL_EMAIL}
+  on_completion: true
+  on_failure: true
+  on_partial_failure: true
+  # Fallback if you obtain a Slack webhook URL
+  slack_webhook:
+    webhook_url: ${SLACK_WEBHOOK_URL}
+
+logging:
+  level: INFO                            # DEBUG | INFO | WARNING | ERROR
+  file: logs/evaluator.log
+  max_bytes: 10485760                    # 10 MB
+  backup_count: 5
+  console: true

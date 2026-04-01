@@ -1,0 +1,12 @@
+httpx[asyncio]>=0.27
+anthropic>=0.30
+openai>=1.40
+pydantic>=2.7
+pydantic-settings>=2.3
+PyYAML>=6.0
+python-dotenv>=1.0
+tenacity>=8.4
+pytz>=2024.1
+rich>=13.7
+tiktoken>=0.7
+aiolimiter>=1.1
