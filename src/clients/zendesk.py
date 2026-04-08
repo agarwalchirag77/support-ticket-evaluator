@@ -65,16 +65,31 @@ class ZendeskClient:
         if cursor:
             url = f"{self._base_url}/incremental/tickets/cursor.json"
             params: dict = {"cursor": cursor}
-        else:
+            logger.info(f"Using cursor: {cursor[:20]}...")
+        elif start_time_unix:
             url = f"{self._base_url}/incremental/tickets/cursor.json"
-            params = {"start_time": start_time_unix or 0}
+            params = {"start_time": start_time_unix}
+            logger.info(f"Using start_time: {start_time_unix}")
+        else:
+            raise ValueError("Either cursor or start_time_unix must be provided")
 
         async with self._client() as client:
+            iteration = 0
             while url:
+                iteration += 1
+                logger.info(f"Pagination iteration {iteration}: params={params}")
                 await self._export_limiter.acquire()
-
-                async def _fetch(u=url, p=params):
-                    resp = await client.get(u, params=p)
+                
+                async def _fetch(u=url, p=params.copy()):
+                    # Build request to log the actual URL being sent
+                    import copy
+                    params_copy = copy.deepcopy(p)
+                    resp = await client.get(u, params=params_copy)
+                    if resp.status_code >= 400:
+                        logger.error(
+                            "Zendesk cursor API returned %d: %s\nRequest: GET %s with params=%s",
+                            resp.status_code, resp.text[:500], u, params_copy
+                        )
                     resp.raise_for_status()
                     return resp.json()
 
@@ -97,7 +112,10 @@ class ZendeskClient:
 
                 # Update cursor for next page
                 after_cursor = data.get("after_cursor")
+                after_url = data.get("after_url")
                 end_of_stream = data.get("end_of_stream", False)
+
+                logger.info(f"Response: after_cursor={after_cursor}, after_url={after_url[:60] if after_url else None}..., end_of_stream={end_of_stream}")
 
                 if end_of_stream or not after_cursor:
                     # Save the final cursor so next run resumes from here
@@ -106,8 +124,8 @@ class ZendeskClient:
                     break
 
                 # Next page: use after_cursor
-                url = data.get("after_url", url)
-                params = {}  # after_url already has cursor embedded
+                url = f"{self._base_url}/incremental/tickets/cursor.json"  # Reset to base URL
+                params = {"cursor": after_cursor}  # Use cursor parameter
                 self._last_cursor = after_cursor
 
     @property

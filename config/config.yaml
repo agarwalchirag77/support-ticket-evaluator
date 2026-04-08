@@ -1,12 +1,12 @@
 zendesk:
   subdomain: hevodata
-  email: ${ZENDESK_EMAIL}
-  api_token: ${ZENDESK_API_TOKEN}
+  email: sample@gmail.com
+  api_token: sbkdbdhkbfn
   # Groups to fetch tickets from (find IDs via GET /api/v2/groups.json)
   groups:
-    - id: ${CHAT_L1_GROUP_ID}
-      name: "Chat L1 Support"
-    - id: ${GENERAL_ESCALATION_GROUP_ID}
+    - id: 44897999201817
+      name: "Chat - L1 support"
+    - id: 6338786491161
       name: "General Escalation"
   ticket_status: closed
   rate_limit:
@@ -15,7 +15,7 @@ zendesk:
     export_requests_per_minute: 8        # incremental export (Zendesk limit: 10/min)
 
 llm:
-  provider: claude                        # claude | openai — change here, no code changes
+  provider: openai                        # claude | openai — change here, no code changes
   claude:
     model: claude-opus-4-6
     api_key: ${ANTHROPIC_API_KEY}
