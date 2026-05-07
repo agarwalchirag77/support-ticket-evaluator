@@ -9,13 +9,18 @@ zendesk:
     - id: ${GENERAL_ESCALATION_GROUP_ID}
       name: "General Escalation"
   ticket_status: closed
+  # Optional fetch filters (all client-side, applied after Zendesk API response)
+  # ticket_types: [question, incident, problem, task]  # empty = all types
+  # tags_include: [support]    # ticket must have ALL of these tags to be fetched
+  tags_exclude: [spam_spam]   # skip spam tickets
+  forms_exclude: [51829763388825]  # skip Proactive Notification form tickets
   rate_limit:
     # Zendesk standard plan: 700 req/min regular, 10 req/min for incremental export
     regular_requests_per_minute: 400     # conservative ceiling for comments/metrics/write
     export_requests_per_minute: 8        # incremental export (Zendesk limit: 10/min)
 
 llm:
-  provider: claude                        # claude | openai — change here, no code changes
+  provider: openai                        # claude | openai — change here, no code changes
   claude:
     model: claude-opus-4-6
     api_key: ${ANTHROPIC_API_KEY}
@@ -39,7 +44,7 @@ pipeline:
 
 evaluation:
   prompt_file: config/prompts/evaluation_v1.md
-  prompt_version: "v1"                   # bump this when prompt changes
+  prompt_version: "v2"                   # bump this when prompt changes
   skip_if_evaluated: true                # skip tickets already in DB with this prompt_version
   sla:
     # Optional: Zendesk custom field ID that holds the ticket's severity tier.
@@ -71,14 +76,15 @@ evaluation:
       #   ttr_minutes: 2160
   # FRT/TTR rating breach thresholds
   breach_minor_multiplier: 1.2           # within 20% of threshold = Rating 3 (vs Rating 2)
+  reopen_reason_field_id: 47413816539289  # Zendesk field ID for the "Reopen Reason" custom field
 
 zendesk_write_back:
-  enabled: false
+  enabled: true
   # Fill in the Zendesk custom field IDs below.
   # Set to null to skip writing that field.
   custom_fields:
-    aggregate_score: 56518743015321                # decimal e.g. 3.6
-    evaluation_date: 56518747268633                # date: YYYY-MM-DD
+    aggregate_score: null                # decimal e.g. 3.6
+    evaluation_date: 56836292471577                # date: YYYY-MM-DD
     evaluator_confidence: 56518867476377           # text: HIGH/MEDIUM/LOW
     prompt_version: 56518883100313                 # text: v1, v2, etc.
     frt_status: null                     # text: MET/BREACHED/NOT_APPLICABLE
@@ -86,28 +92,29 @@ zendesk_write_back:
     llm_provider: 56518921633177                   # text: e.g. claude-opus-4-6
   # Optional per-metric rating fields (set field ID or leave null to skip)
   metric_fields:
-    METRIC_1: 56518296947609
-    METRIC_2: 56518304309145
-    METRIC_3: 56518372532377
-    METRIC_4: 56518390157465
-    METRIC_5: 56518368133913
-    METRIC_6: 56518354572441
-    METRIC_7: 56518406390425
-    METRIC_8: 56518362410393
-    METRIC_9: 56518407920281
-    METRIC_10: 56518423367449
-    METRIC_11: 56518387776921
-    METRIC_12: 56518425291545
-    METRIC_13: 56518426112409
-    METRIC_14: 56518402706457
-    METRIC_15: 56518435278873
-    METRIC_16: 56518429764761
-    METRIC_17: 56518450393753
-    METRIC_18: 56518465738521
+    METRIC_1: 56524413577625
+    METRIC_2: 56524472178713
+    METRIC_3: 56524426888857
+    METRIC_4: 56524427868057
+    METRIC_5: 56524457113113
+    METRIC_6: 56524441096345
+    METRIC_7: 56524413531161
+    METRIC_8: 56524442096281
+    METRIC_9: 56524427459353
+    METRIC_10: 56524427659929
+    METRIC_11: 56524411521689
+    METRIC_12: 56524413810201
+    METRIC_13: 56524411961113
+    METRIC_14: 56524471358745
+    METRIC_15: 56524429072921
+    METRIC_16: 56524411473945
+    METRIC_17: 56524441487129
+    METRIC_18: 56524456796569
+    METRIC_19: 57403666983961
 
 state:
   file: data/state.json
-  initial_fetch_from: "2025-01-01T00:00:00Z"   # used only on first-ever run
+  initial_fetch_from: "2026-05-02T00:00:00Z"   # used only on first-ever run (or when cursor is null)
 
 output:
   tickets_dir: data/tickets

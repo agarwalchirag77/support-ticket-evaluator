@@ -61,6 +61,10 @@ class ZendeskConfig:
     groups: list[ZendeskGroup]
     ticket_status: str = "closed"
     rate_limit: ZendeskRateLimit = field(default_factory=ZendeskRateLimit)
+    ticket_types: list[str] = field(default_factory=list)  # empty = all types
+    tags_include: list[str] = field(default_factory=list)  # must have ALL of these
+    tags_exclude: list[str] = field(default_factory=list)  # must have NONE of these
+    forms_exclude: list[int] = field(default_factory=list)  # ticket_form_id values to skip
 
     @property
     def group_ids(self) -> list[str]:
@@ -138,6 +142,7 @@ class EvaluationConfig:
     skip_if_evaluated: bool = True
     sla: SLAConfig = field(default_factory=SLAConfig)
     breach_minor_multiplier: float = 1.2
+    reopen_reason_field_id: Optional[int] = None
 
 
 @dataclass
@@ -249,7 +254,8 @@ def _float(v: Any, default: float = 0.0) -> float:
 
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     """Load and parse the application config, expanding env variables."""
-    load_dotenv(override=False)
+    config_path = Path(config_path).resolve()
+    load_dotenv(config_path.parent.parent / ".env", override=False)
 
     raw = yaml.safe_load(Path(config_path).read_text())
     raw = _expand(raw)
@@ -267,6 +273,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             regular_requests_per_minute=_int(rl.get("regular_requests_per_minute"), 400),
             export_requests_per_minute=_int(rl.get("export_requests_per_minute"), 8),
         ),
+        ticket_types=z.get("ticket_types") or [],
+        tags_include=z.get("tags_include") or [],
+        tags_exclude=z.get("tags_exclude") or [],
+        forms_exclude=[int(f) for f in (z.get("forms_exclude") or [])],
     )
 
     lm = raw["llm"]
@@ -345,6 +355,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             severity_field_id=sl.get("severity_field_id") or None,
         ),
         breach_minor_multiplier=_float(ev.get("breach_minor_multiplier"), 1.2),
+        reopen_reason_field_id=_int(ev.get("reopen_reason_field_id")) or None,
     )
 
     wb = raw.get("zendesk_write_back", {})

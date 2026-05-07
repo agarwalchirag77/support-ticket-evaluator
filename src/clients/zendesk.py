@@ -30,6 +30,7 @@ class ZendeskClient:
         self._base_url = f"https://{zd.subdomain}.zendesk.com/api/v2"
         credentials = f"{zd.email}/token:{zd.api_token}"
         token = base64.b64encode(credentials.encode()).decode()
+        logger.info(token)
         self._headers = {
             "Authorization": f"Basic {token}",
             "Content-Type": "application/json",
@@ -40,6 +41,10 @@ class ZendeskClient:
         self._export_limiter = RateLimiter(zd.rate_limit.export_requests_per_minute)
         self._group_ids = set(str(g.id) for g in zd.groups)
         self._ticket_status = zd.ticket_status
+        self._ticket_types = set(zd.ticket_types)
+        self._tags_include = set(zd.tags_include)
+        self._tags_exclude = set(zd.tags_exclude)
+        self._forms_exclude = set(zd.forms_exclude)
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=self._headers, timeout=30.0)
@@ -108,6 +113,18 @@ class ZendeskClient:
                         continue
                     if status != self._ticket_status:
                         continue
+                    # Filter by ticket type (empty = all types allowed)
+                    if self._ticket_types and ticket.get("type") not in self._ticket_types:
+                        continue
+                    # Filter by tags
+                    ticket_tags = set(ticket.get("tags") or [])
+                    if self._tags_include and not self._tags_include.issubset(ticket_tags):
+                        continue
+                    if self._tags_exclude and self._tags_exclude.intersection(ticket_tags):
+                        continue
+                    # Filter by form ID
+                    if self._forms_exclude and ticket.get("ticket_form_id") in self._forms_exclude:
+                        continue
                     yield ticket
 
                 # Update cursor for next page
@@ -169,6 +186,22 @@ class ZendeskClient:
         return data.get("comments", [])
 
     # ------------------------------------------------------------------
+    # Field metadata
+    # ------------------------------------------------------------------
+
+    async def fetch_tagger_options(self, field_id: int) -> list[str]:
+        """Return option tag values for a tagger-type field, or [] if not a tagger."""
+        url = f"{self._base_url}/ticket_fields/{field_id}.json"
+        async with self._client() as client:
+            await self._regular_limiter.acquire()
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json().get("ticket_field", {})
+            if data.get("type") != "tagger":
+                return []
+            return [opt["value"] for opt in data.get("custom_field_options", [])]
+
+    # ------------------------------------------------------------------
     # Write-back
     # ------------------------------------------------------------------
 
@@ -195,10 +228,14 @@ class ZendeskClient:
                 if resp.status_code == 422:
                     logger.error(
                         "Zendesk rejected field update for ticket %s: %s",
-                        ticket_id, resp.text[:200],
+                        ticket_id, resp.text[:500],
                     )
                     return  # Don't retry validation errors
                 resp.raise_for_status()
+                logger.debug(
+                    "Zendesk update ticket %s — status=%d body=%s",
+                    ticket_id, resp.status_code, resp.text[:500],
+                )
 
             await with_retry(_put, max_attempts=3, base_delay=1.0)
 
