@@ -120,6 +120,40 @@ def _patch_metric(
     logger.warning("Metric %s not found in evaluation result for ticket %s", metric_id, result.ticket_id)
 
 
+def _set_metric_direct(
+    result: EvaluationResult,
+    metric_id: str,
+    new_rating: Union[int, str],
+    override_note: Optional[str] = None,
+) -> None:
+    """Unconditionally override a metric's rating (no conservative merge).
+
+    Used for METRIC_19 where authoritative data is always final, unlike SLA
+    metrics which preserve agent-caused escalation severity via conservative merge.
+
+    When the override changes the rating, ``override_note`` (if given) is appended
+    to the metric's ``reasoning`` so the record stays self-consistent — otherwise
+    the LLM's original reasoning text would contradict the overridden rating.
+    """
+    for metric in result.metrics:
+        if metric.metric_id == metric_id:
+            old = metric.rating
+            if old != new_rating:
+                logger.debug(
+                    "Direct override %s: %s → %s (deterministic)",
+                    metric_id, old, new_rating,
+                )
+                if override_note:
+                    existing = (metric.reasoning or "").rstrip()
+                    metric.reasoning = f"{existing} {override_note}".strip()
+            metric.rating = new_rating
+            metric.rating_label = _RATING_LABELS.get(new_rating, str(new_rating))
+            return
+    logger.warning(
+        "Metric %s not found in result for ticket %s", metric_id, result.ticket_id
+    )
+
+
 def _apply_weekend_exclusion(
     calendar_minutes: float,
     assigned_at: str,
@@ -174,6 +208,50 @@ def _extract_severity(ticket: ZendeskTicket, field_id: Optional[str]) -> Optiona
             if str(cf.id) == field_id:
                 return str(cf.value) if cf.value is not None else None
     return ticket.priority
+
+
+_NOT_A_REOPEN_TAG = "not_a_reopen_1"
+
+
+def _get_reopen_reason(ticket: ZendeskTicket, field_id: int) -> Optional[str]:
+    """Return the value of the reopen reason custom field, or None."""
+    for cf in ticket.custom_fields:
+        if cf.id is not None and int(cf.id) == field_id:
+            return str(cf.value).strip() if cf.value else None
+    return None
+
+
+def _reopen_reason_override(
+    reopens: Optional[int],
+    reason: Optional[str],
+) -> Optional[Union[int, str]]:
+    """Return authoritative METRIC_19 rating, or None to keep LLM rating.
+
+    Deterministic overrides apply only where the answer is unambiguous from the
+    reopens counter alone:
+      - reopens == 0: rating 4 if the agent confirmed "not_a_reopen_1", else 1.
+      - reopens  > 0 with a BLANK field: rating 1 (agent skipped QC).
+    Everything else returns None and defers to the LLM, because Zendesk's
+    reopens counter increments on ANY post-solve reply (including a courtesy
+    "thank you") and cannot distinguish a genuine reopen from a non-substantive
+    one — only the conversation can. "duplicate_ticket" always defers too.
+    """
+    # duplicate_ticket is an agent judgment call — always defer to LLM
+    if reason == "duplicate_ticket":
+        return None
+
+    count = reopens if reopens is not None else 0
+    if count == 0:
+        return 4 if reason == _NOT_A_REOPEN_TAG else 1
+
+    # count > 0 from here
+    if not reason:
+        return 1  # blank field but ticket was reopened — agent skipped QC
+    # Any selected tag (including not_a_reopen_1) defers to the LLM: Zendesk's
+    # reopens counter increments on ANY post-solve reply — even a courtesy
+    # "thank you" — so it cannot tell a genuine reopen from a non-substantive
+    # one. Only the LLM's read of the conversation can judge tag accuracy.
+    return None
 
 
 def patch_sla_and_ratings(
@@ -281,6 +359,17 @@ def patch_sla_and_ratings(
     # --- Patch METRIC_10 (TTR) ---
     auth_ttr_rating = _ttr_rating(ttr_min, ttr_threshold, mult)
     _patch_metric(result, "METRIC_10", auth_ttr_rating)
+
+    # --- Patch METRIC_19 (QC Reopen Reason) ---
+    if eval_config.reopen_reason_field_id:
+        reopen_reason = _get_reopen_reason(ticket, eval_config.reopen_reason_field_id)
+        auth_reopen_rating = _reopen_reason_override(ticket_metric.reopens, reopen_reason)
+        if auth_reopen_rating is not None:
+            note = (
+                f"[System override: reopens={ticket_metric.reopens or 0}, "
+                f"reopen_reason={reopen_reason or 'blank'} — rating set deterministically.]"
+            )
+            _set_metric_direct(result, "METRIC_19", auth_reopen_rating, override_note=note)
 
     # --- Final clamp: ensure no metric has rating 0 ---
     for m in result.metrics:

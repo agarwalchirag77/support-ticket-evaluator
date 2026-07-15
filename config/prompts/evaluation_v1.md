@@ -185,6 +185,42 @@ Rating 3: Notes present but missing one key piece of context.
 Rating 2: Notes too sparse; significant context missing.
 Rating 1: No internal notes or notes are unhelpful.
 N/A: Single-touch ticket fully resolved in one interaction with no handoff risk.
+---
+METRIC 19: QC REOPEN REASON
+Definition: Did the agent select the correct Reopen Reason for why the ticket was reopened after being solved — or correctly confirm that no reopen occurred?
+Look for: The custom field with ID 47413816539289 in Ticket_Metadata.ticket.custom_fields. Read its value (a tag string), then judge whether it matches what actually happened in the conversation.
+
+**HOW TO EVALUATE THIS METRIC — DO NOT RUBBER-STAMP THE AGENT'S TAG.**
+Evaluate in this order:
+  1. FIRST, read the conversation and decide for yourself what the reopen reason *should* be (use the decision tree below). Do this BEFORE looking at which tag the agent selected — do not assume the agent's tag is correct.
+  2. THEN compare the agent's selected tag to your own conclusion and rate how well it matches.
+
+**CRITICAL — the reopens counter is noisy.** `ticket_metric.reopens` increments on ANY customer reply to a solved ticket — including a pure courtesy reply ("Thank you", "Noted", a signature, or an automated CSAT/survey response). A non-zero `reopens` does NOT prove a substantive reopen occurred. Conversely, a real reopen can be hidden behind a "not_a_reopen_1" tag. Always verify against the actual messages.
+
+**Finding the reopen point.** The ticket data stores only the FINAL solved_at timestamp (after any re-resolution), so you must infer where the reopen happened from the conversation flow: locate the point where the issue first appeared resolved, then read the customer's message(s) that came after it. That follow-up message is what determines the correct reopen reason.
+
+DECISION TREE — pick the reason that matches the post-solve follow-up:
+  • reopen_-_issue_unresolved — The agent's fix did NOT work; the SAME problem persists. Signals: "still failing", "still happening", "tried what you said and X still occurs", or the ticket was escalated to L2/Engineering without a closure confirmation.
+  • reopen_-_issue_resolved_-_additional_info — The original issue is EXPLICITLY confirmed fixed, and the customer only asks for clarification, next steps, or scope (e.g. "has this been implemented for all pipelines?", "how do I avoid this next time?").
+  • new_issue_1 — Customer returned with a completely DIFFERENT, unrelated problem or query (different connector/area, not the original issue).
+  • not_an_issue_1 — A follow-up reopened the ticket but was not a real issue: pure closure/acknowledgement/admin at the natural end of the thread, with no technical content (e.g. "thanks, you can close this", account/process follow-up).
+  • not_a_reopen_1 — No substantive reopen at all; the only thing after solve was a courtesy reply (thank-you / survey / signature).
+  • reopen_after_autoclose — Ticket auto-closed due to customer inactivity, then the customer responded.
+  • duplicate_ticket — The ticket is a duplicate of another existing ticket.
+
+RATING:
+Rating 4: The agent's tag matches your conversation-derived reason precisely. NOTE: for a non-substantive (courtesy) reopen, BOTH "not_a_reopen_1" AND "not_an_issue_1" are acceptable — rate 4 for either; do not down-rate the choice between them.
+Rating 3: Broadly correct but a more precise option existed (e.g. chose "reopen_-_issue_unresolved" when "reopen_-_issue_resolved_-_additional_info" was the closer match).
+Rating 2: The tag mischaracterises the reopen — e.g. a persisting/unresolved issue tagged "new_issue_1", "reopen_-_issue_resolved_-_additional_info", or "not_a_reopen_1"; or a fixed-issue clarification tagged "not_a_reopen_1".
+Rating 1: Field is blank/null when a reopen reason should have been set, OR the tag clearly contradicts the conversation, OR a genuine substantive reopen was hidden behind "not_a_reopen_1".
+N/A: Not applicable for this metric — all agent selections are judgeable.
+
+WORKED EXAMPLES:
+  • Issue solved; customer's only follow-up is "Thank you for the update." → non-substantive reopen. Agent tagged "not_a_reopen_1" (or "not_an_issue_1") → Rating 4.
+  • Customer reports duplicate data; agent explains a cause; customer later replies "We still have the same problem, your fix did nothing." Agent tagged "new_issue_1" → Rating 2 (it is the SAME unresolved issue → should be "reopen_-_issue_unresolved").
+  • Issue fixed and confirmed; customer later asks "Has this change been applied to all my pipelines?" Agent tagged "not_a_reopen_1" → Rating 2 (a substantive clarification on a resolved issue → should be "reopen_-_issue_resolved_-_additional_info").
+
+NOTE: The system applies deterministic overrides AFTER your evaluation only in unambiguous cases — when ticket_metric.reopens == 0, or when reopens > 0 but the field was left blank. Whenever reopens > 0 AND a reason tag is selected (including "not_a_reopen_1"), YOUR contextual judgment is authoritative and is kept as-is — so judge those cases carefully against the conversation.
 === END METRIC DEFINITIONS ===
 
 
@@ -425,7 +461,7 @@ NOTE: Do NOT include `rating_label` in metric objects or `band` in aggregate_sco
       "reasoning": "<2–4 sentence explanation linking evidence to rating using rubric>",
       "improvement_note": "<Optional: specific action agent could have taken to score higher. Leave empty string if rating is 4 or N/A>"
     }
-    // ... repeat for all 18 metrics
+    // ... repeat for all 19 metrics
   ],
   "aggregate_score": {
     "numeric": <X.X>,

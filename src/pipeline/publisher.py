@@ -17,21 +17,87 @@ from src.storage.database import Database
 logger = logging.getLogger(__name__)
 
 
+def _find_tagger_option(options: list[str], value: str) -> Optional[str]:
+    """Find the tagger option tag that ends with _{value} (case-insensitive).
+
+    E.g. options=['qc_metric_1','qc_metric_2','qc_metric_na'], value='4'
+    → returns 'qc_metric_4'.  Returns None if no match.
+    """
+    suffix = f"_{str(value).lower()}"
+    if value == "N/A":
+        suffix = "_na"
+    for opt in options:
+        if opt.endswith(suffix):
+            return opt
+    return None
+
+
 class Publisher:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
         self._db = Database(config.output.database)
         self._zendesk = ZendeskClient(config)
+        # Cache: field_id (int) -> list of tagger option strings (empty = not a tagger)
+        self._tagger_options: dict[int, list[str]] = {}
+
+    async def _load_tagger_options(self) -> None:
+        """Pre-fetch tagger options for all configured write-back fields (once per run)."""
+        if self._tagger_options:
+            return  # already loaded
+
+        wb = self._config.zendesk_write_back
+        cf = wb.custom_fields
+
+        all_field_ids: list[int] = []
+        for fid in [cf.aggregate_score, cf.evaluation_date, cf.evaluator_confidence,
+                    cf.prompt_version, cf.frt_status, cf.ttr_status, cf.llm_provider]:
+            if fid:
+                all_field_ids.append(int(fid))
+        for fid in wb.metric_fields.values():
+            if fid:
+                all_field_ids.append(int(fid))
+
+        results = await asyncio.gather(
+            *[self._zendesk.fetch_tagger_options(fid) for fid in all_field_ids],
+            return_exceptions=True,
+        )
+        for fid, options in zip(all_field_ids, results):
+            if isinstance(options, Exception):
+                logger.warning("Could not fetch options for field %d: %s", fid, options)
+                self._tagger_options[fid] = []
+            else:
+                self._tagger_options[fid] = options
+                if options:
+                    logger.debug("Field %d is tagger with %d options", fid, len(options))
 
     async def publish_all(
         self,
         results: list[EvaluationResult],
+        dry_run: bool = False,
     ) -> tuple[int, int]:
-        """Publish results to Zendesk. Returns (success_count, error_count)."""
+        """Publish results to Zendesk. Returns (success_count, error_count).
+
+        When dry_run=True, prints what would be published without making API calls.
+        """
         wb = self._config.zendesk_write_back
-        if not wb.enabled:
+        if not wb.enabled and not dry_run:
             logger.info("Zendesk write-back disabled — skipping publish")
             return 0, 0
+
+        await self._load_tagger_options()
+
+        if dry_run:
+            logger.info("[DRY RUN] Would publish %d evaluation(s) to Zendesk", len(results))
+            for r in results:
+                fields = self._build_custom_fields(r)
+                score = r.aggregate_score.numeric if r.aggregate_score else "?"
+                logger.info(
+                    "[DRY RUN] Ticket %s — score=%s band=%s fields=%d",
+                    r.ticket_id, score, r.aggregate_score.band if r.aggregate_score else "?", len(fields),
+                )
+                for f in fields:
+                    logger.info("[DRY RUN]   field_id=%s value=%s", f["id"], f["value"])
+            return len(results), 0
 
         published = 0
         errors = 0
@@ -101,16 +167,67 @@ class Publisher:
         fields = []
         for field_id, value in field_map.items():
             if field_id and value is not None:
-                fields.append({"id": int(field_id), "value": value})
+                fid_int = int(field_id)
+                options = self._tagger_options.get(fid_int, [])
+                resolved = _find_tagger_option(options, str(value)) if options else value
+                if resolved is not None:
+                    fields.append({"id": fid_int, "value": resolved})
 
         # Per-metric fields
         for metric in result.metrics:
             field_id = mf.get(metric.metric_id)
             if field_id:
-                rating_val = metric.rating if metric.rating != "N/A" else None
-                fields.append({"id": int(field_id), "value": rating_val})
+                fid_int = int(field_id)
+                options = self._tagger_options.get(fid_int, [])
+                if metric.rating == "N/A":
+                    rating_val = _find_tagger_option(options, "N/A") if options else None
+                else:
+                    rating_val = _find_tagger_option(options, str(metric.rating)) if options else metric.rating
+                if rating_val is not None:
+                    fields.append({"id": fid_int, "value": rating_val})
 
         return fields
+
+    def export_csv_for_range(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        fmt: str = "both",
+    ) -> int:
+        """Export evaluations for a date range to CSV without touching Zendesk.
+
+        Args:
+            from_date: Filter tickets closed on/after this date (YYYY-MM-DD).
+            to_date: Filter tickets closed on/before this date (YYYY-MM-DD).
+            fmt: "wide", "long", or "both".
+
+        Returns the number of evaluations exported.
+        """
+        from src.models.evaluation import EvaluationResult as _ER
+        rows = self._db.get_evaluations_in_range(from_date, to_date)
+        results = []
+        for row in rows:
+            path = row["eval_json_path"]
+            if path and Path(path).exists():
+                try:
+                    results.append(_ER.model_validate_json(Path(path).read_text()))
+                except Exception as exc:
+                    logger.warning("Skipping unreadable eval %s: %s", path, exc)
+
+        if not results:
+            logger.info("No evaluations found for the given range")
+            return 0
+
+        exports_dir = Path(self._config.output.exports_dir)
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        prefix = f"{from_date or 'all'}_to_{to_date or 'now'}"
+
+        if fmt in ("wide", "both"):
+            self._export_wide_csv(results, exports_dir / f"{prefix}_evaluations_wide.csv")
+        if fmt in ("long", "both"):
+            self._export_long_csv(results, exports_dir / f"{prefix}_evaluations_long.csv")
+
+        return len(results)
 
     # ------------------------------------------------------------------
     # CSV export
@@ -129,7 +246,7 @@ class Publisher:
 
     def _export_wide_csv(self, results: list[EvaluationResult], path: Path) -> None:
         """One row per ticket; metrics as columns in canonical METRIC_1..18 order."""
-        METRIC_IDS = [f"METRIC_{i}" for i in range(1, 19)]
+        METRIC_IDS = [f"METRIC_{i}" for i in range(1, 20)]
 
         fieldnames = [
             "ticket_id", "evaluation_date", "agent_name", "prompt_version",

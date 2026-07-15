@@ -103,6 +103,7 @@ class Evaluator:
 
             # Parse and validate
             result = EvaluationResult.model_validate(raw_result)
+            result.evaluation_date = datetime.now(timezone.utc).isoformat()
             result.prompt_version = prompt_version
             result.llm_provider = self._config.llm.provider
             result.llm_model = self._config.llm.active.model
@@ -113,8 +114,12 @@ class Evaluator:
             metrics_obj = raw_ticket.get_metrics()
             result = patch_sla_and_ratings(result, metrics_obj, ticket_obj, self._config.evaluation)
 
-            # Save to disk
-            eval_path = self._file_store.save_eval(result, prompt_version)
+            # Save to disk under the ticket's closed date directory
+            ticket_stub = ticket_data["Ticket_Metadata"]["ticket"]
+            metrics_raw = ticket_data["Ticket_Metrics"]["ticket_metric"]
+            solved_at = metrics_raw.get("solved_at") or ticket_stub.get("updated_at") or ""
+            closed_date = solved_at[:10] if solved_at else None
+            eval_path = self._file_store.save_eval(result, prompt_version, date=closed_date)
 
             # Save to DB (mark old evals as not-latest first)
             self._db.mark_old_evaluations(ticket_id)

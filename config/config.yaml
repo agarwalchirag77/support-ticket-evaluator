@@ -12,8 +12,20 @@ zendesk:
   # Optional fetch filters (all client-side, applied after Zendesk API response)
   # ticket_types: [question, incident, problem, task]  # empty = all types
   # tags_include: [support]    # ticket must have ALL of these tags to be fetched
-  tags_exclude: [spam_spam]   # skip spam tickets
+  tags_exclude: []            # generic tag excludes (spam moved to exclusions.spam below)
   forms_exclude: [51829763388825]  # skip Proactive Notification form tickets
+  # Categorised QC exclusions — tickets matching any rule are never fetched,
+  # evaluated, or re-evaluated. Categories name the reason in logs/purge reports.
+  exclusions:
+    tag_categories:
+      duplicate: [duplicate_ticket]
+      alert: ["issue_type:user_action_required", h1-jira-automation, jira_manual_edge]
+      spam: [spam, spam_spam]
+    form_categories:
+      duplicate: [47659393352345]         # Duplicate-ticket form
+      feature_request: [49138803315225]   # FQ (feature request) form
+    exclude_channels: [side_conversation]   # review tickets via side conversations
+    exclude_unassigned: true                # Cerebra-bot tickets have no assignee
   rate_limit:
     # Zendesk standard plan: 700 req/min regular, 10 req/min for incremental export
     regular_requests_per_minute: 400     # conservative ceiling for comments/metrics/write
@@ -39,7 +51,7 @@ llm:
 
 pipeline:
   concurrent_fetches: 3                   # parallel Zendesk comment/metric calls
-  concurrent_evaluations: 2              # parallel LLM calls
+  concurrent_evaluations: 6              # parallel LLM calls
   queue_size: 50
 
 evaluation:

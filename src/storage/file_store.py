@@ -80,3 +80,17 @@ class FileStore:
             if to_date and d > to_date[:10]:
                 continue
             yield from sorted(date_dir.glob("Ticket_*.json"))
+
+    def delete_ticket_artifacts(self, ticket_id: int) -> list[Path]:
+        """Delete ALL ticket + eval JSONs for a ticket across every date dir
+        and prompt version. Returns the deleted paths."""
+        deleted: list[Path] = []
+        for p in self.tickets_dir.glob(f"*/Ticket_{ticket_id}.json"):
+            p.unlink()
+            deleted.append(p)
+        for p in self.evals_dir.glob(f"*/eval_{ticket_id}_*.json"):
+            p.unlink()
+            deleted.append(p)
+        if deleted:
+            logger.debug("Deleted %d file(s) for ticket %s", len(deleted), ticket_id)
+        return deleted

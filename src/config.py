@@ -54,6 +54,19 @@ class ZendeskRateLimit:
 
 
 @dataclass
+class ExclusionsConfig:
+    """Categorised QC-exclusion rules (duplicate / alert / spam / etc.).
+
+    Unlike the generic tags_exclude/forms_exclude, each rule belongs to a named
+    category so skip logs and purge reports can attribute the reason.
+    """
+    tag_categories: dict[str, list[str]] = field(default_factory=dict)
+    form_categories: dict[str, list[int]] = field(default_factory=dict)
+    exclude_channels: list[str] = field(default_factory=list)
+    exclude_unassigned: bool = False
+
+
+@dataclass
 class ZendeskConfig:
     subdomain: str
     email: str
@@ -65,6 +78,7 @@ class ZendeskConfig:
     tags_include: list[str] = field(default_factory=list)  # must have ALL of these
     tags_exclude: list[str] = field(default_factory=list)  # must have NONE of these
     forms_exclude: list[int] = field(default_factory=list)  # ticket_form_id values to skip
+    exclusions: ExclusionsConfig = field(default_factory=ExclusionsConfig)
 
     @property
     def group_ids(self) -> list[str]:
@@ -252,6 +266,27 @@ def _float(v: Any, default: float = 0.0) -> float:
         return default
 
 
+def _parse_exclusions(raw: dict) -> ExclusionsConfig:
+    """Parse the zendesk.exclusions block; coerce form IDs to int, drop empties."""
+    tag_categories = {
+        str(cat): [str(t) for t in (tags or []) if t]
+        for cat, tags in (raw.get("tag_categories") or {}).items()
+    }
+    form_categories = {
+        str(cat): [int(f) for f in (forms or []) if f]
+        for cat, forms in (raw.get("form_categories") or {}).items()
+    }
+    # Drop categories with no rules so exclusion checks skip them entirely
+    tag_categories = {k: v for k, v in tag_categories.items() if v}
+    form_categories = {k: v for k, v in form_categories.items() if v}
+    return ExclusionsConfig(
+        tag_categories=tag_categories,
+        form_categories=form_categories,
+        exclude_channels=[str(c) for c in (raw.get("exclude_channels") or [])],
+        exclude_unassigned=_bool(raw.get("exclude_unassigned"), False),
+    )
+
+
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     """Load and parse the application config, expanding env variables."""
     config_path = Path(config_path).resolve()
@@ -277,6 +312,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         tags_include=z.get("tags_include") or [],
         tags_exclude=z.get("tags_exclude") or [],
         forms_exclude=[int(f) for f in (z.get("forms_exclude") or [])],
+        exclusions=_parse_exclusions(z.get("exclusions") or {}),
     )
 
     lm = raw["llm"]

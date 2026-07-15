@@ -9,6 +9,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from src.config import AppConfig
+from src.utils.exclusions import exclusion_reason
 from src.utils.rate_limiter import RateLimiter
 from src.utils.retry import with_retry
 
@@ -30,7 +31,6 @@ class ZendeskClient:
         self._base_url = f"https://{zd.subdomain}.zendesk.com/api/v2"
         credentials = f"{zd.email}/token:{zd.api_token}"
         token = base64.b64encode(credentials.encode()).decode()
-        logger.info(token)
         self._headers = {
             "Authorization": f"Basic {token}",
             "Content-Type": "application/json",
@@ -45,6 +45,7 @@ class ZendeskClient:
         self._tags_include = set(zd.tags_include)
         self._tags_exclude = set(zd.tags_exclude)
         self._forms_exclude = set(zd.forms_exclude)
+        self._exclusions = zd.exclusions
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=self._headers, timeout=30.0)
@@ -124,6 +125,13 @@ class ZendeskClient:
                         continue
                     # Filter by form ID
                     if self._forms_exclude and ticket.get("ticket_form_id") in self._forms_exclude:
+                        continue
+                    # Categorised QC exclusions (duplicate/alert/spam/review/unassigned)
+                    reason = exclusion_reason(ticket, self._exclusions)
+                    if reason:
+                        logger.info(
+                            "Skipping ticket %s — excluded: %s", ticket.get("id"), reason
+                        )
                         continue
                     yield ticket
 
@@ -206,13 +214,16 @@ class ZendeskClient:
     # ------------------------------------------------------------------
 
     async def update_custom_fields(
-        self, ticket_id: int, custom_fields: list[dict]
+        self, ticket_id: int, custom_fields: list[dict], strict: bool = False
     ) -> None:
         """Update ticket custom fields.
 
         Args:
             ticket_id: Zendesk ticket ID.
             custom_fields: List of {"id": field_id, "value": value} dicts.
+            strict: If True, a 422 validation error raises instead of being
+                logged and swallowed. Used by the purger, where a silently
+                failed field-clear must not be treated as success.
         """
         if not custom_fields:
             return
@@ -230,6 +241,8 @@ class ZendeskClient:
                         "Zendesk rejected field update for ticket %s: %s",
                         ticket_id, resp.text[:500],
                     )
+                    if strict:
+                        resp.raise_for_status()
                     return  # Don't retry validation errors
                 resp.raise_for_status()
                 logger.debug(

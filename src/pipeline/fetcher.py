@@ -31,19 +31,33 @@ class Fetcher:
         self,
         state: RunState,
         force: bool = False,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        update_cursor: bool = True,
     ) -> list[dict]:
-        """Fetch all new closed tickets since last run cursor.
+        """Fetch closed tickets from Zendesk.
+
+        When from_date is provided, bypasses the cursor and fetches from that
+        date forward (backfill mode). update_cursor should be False in that case
+        so the incremental cursor is not overwritten.
 
         Returns a list of composite dicts (Ticket_Metadata, Ticket_Metrics,
         Ticket_Comments) ready for the evaluation stage.
         """
-        cursor = state.zendesk_cursor
-        start_time = state.initial_fetch_unix if cursor is None else None
-
-        logger.info(
-            "Fetching tickets: %s",
-            f"cursor={cursor}" if cursor else f"start_time_unix={start_time} (first run)",
-        )
+        if from_date:
+            # Backfill mode: use the from_date as start time, ignore cursor
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(from_date)
+            start_time = int(dt.timestamp())
+            cursor = None
+            logger.info("Backfill mode: fetching from %s (unix=%d)", from_date, start_time)
+        else:
+            cursor = state.zendesk_cursor
+            start_time = state.initial_fetch_unix if cursor is None else None
+            logger.info(
+                "Fetching tickets: %s",
+                f"cursor={cursor}" if cursor else f"start_time_unix={start_time} (first run)",
+            )
 
         # Collect all ticket stubs from the incremental API
         stubs: list[dict] = []
@@ -54,8 +68,8 @@ class Fetcher:
 
         if not stubs:
             logger.info("No new closed tickets found in configured groups")
-            # Advance cursor even if nothing new
-            if self._zendesk.last_cursor:
+            # Advance cursor even if nothing new (only in incremental mode)
+            if update_cursor and self._zendesk.last_cursor:
                 state.update_cursor(
                     self._zendesk.last_cursor,
                     datetime.now(timezone.utc).isoformat(),
@@ -80,8 +94,22 @@ class Fetcher:
             else:
                 enriched.append(result)
 
-        # Advance the cursor after a successful batch
-        if self._zendesk.last_cursor:
+        # Apply to_date filter: drop tickets closed after the window end
+        if to_date:
+            before = len(enriched)
+            enriched = [
+                t for t in enriched
+                if (
+                    t.get("Ticket_Metrics", {}).get("ticket_metric", {}).get("solved_at") or
+                    t.get("Ticket_Metadata", {}).get("ticket", {}).get("updated_at") or ""
+                )[:10] <= to_date
+            ]
+            dropped = before - len(enriched)
+            if dropped:
+                logger.info("Filtered out %d ticket(s) closed after %s", dropped, to_date)
+
+        # Advance the cursor after a successful batch (incremental mode only)
+        if update_cursor and self._zendesk.last_cursor:
             last_updated = max(
                 (t.get("Ticket_Metadata", {}).get("ticket", {}).get("updated_at", "")
                  for t in enriched),
@@ -118,7 +146,12 @@ class Fetcher:
                 "Ticket_Comments": {"comments": comments},
             }
 
-            path = self._file_store.save_ticket(ticket_id, raw)
+            # Use ticket's closed date (solved_at from metrics, fallback to updated_at)
+            # so directories are named by when the ticket closed, not when it was fetched
+            solved_at = metrics.get("solved_at") or stub.get("updated_at") or ""
+            closed_date = solved_at[:10] if solved_at else None
+
+            path = self._file_store.save_ticket(ticket_id, raw, date=closed_date)
             self._db.upsert_ticket(
                 ticket_id=ticket_id,
                 fetched_at=datetime.now(timezone.utc).isoformat(),

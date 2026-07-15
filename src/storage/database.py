@@ -218,12 +218,148 @@ class Database:
                 (published_at, eval_id),
             )
 
-    def get_unpublished_evaluations(self) -> list[sqlite3.Row]:
+    # ------------------------------------------------------------------
+    # Purge (QC exclusions)
+    # ------------------------------------------------------------------
+
+    def get_ticket_eval_rows(self, ticket_id: int) -> list[sqlite3.Row]:
+        """All evaluation rows (any version/latest flag) for a ticket."""
         conn = self._connect()
         try:
-            return conn.execute(
-                "SELECT * FROM evaluations WHERE published_to_zendesk=0 AND is_latest=1"
+            cur = conn.execute(
+                "SELECT id, published_to_zendesk, eval_json_path FROM evaluations WHERE ticket_id=?",
+                (ticket_id,),
+            )
+            return cur.fetchall()
+        finally:
+            conn.close()
+
+    def delete_ticket_data(self, ticket_id: int) -> dict:
+        """Delete a ticket and ALL its evaluations/metric rows in one transaction.
+
+        FKs have no ON DELETE CASCADE, so children are deleted explicitly in
+        dependency order. Returns per-table deleted row counts.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM metric_results WHERE evaluation_id IN "
+                "(SELECT id FROM evaluations WHERE ticket_id=?)",
+                (ticket_id,),
+            )
+            metric_rows = cur.rowcount
+            cur.execute("DELETE FROM evaluations WHERE ticket_id=?", (ticket_id,))
+            eval_rows = cur.rowcount
+            cur.execute("DELETE FROM tickets WHERE ticket_id=?", (ticket_id,))
+            ticket_rows = cur.rowcount
+        return {
+            "metric_results": metric_rows,
+            "evaluations": eval_rows,
+            "tickets": ticket_rows,
+        }
+
+    def get_unpublished_evaluations(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list[sqlite3.Row]:
+        conn = self._connect()
+        try:
+            query = """
+                SELECT e.* FROM evaluations e
+                JOIN tickets t ON t.ticket_id = e.ticket_id
+                WHERE e.published_to_zendesk=0 AND e.is_latest=1
+            """
+            params: list = []
+            if from_date:
+                query += " AND t.closed_at >= ?"
+                params.append(from_date)
+            if to_date:
+                query += " AND t.closed_at <= ?"
+                params.append(to_date + "T23:59:59Z")
+            return conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+
+    def get_summary_stats(self) -> dict:
+        """Return counts for the status command."""
+        conn = self._connect()
+        try:
+            tickets_total = conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0]
+            evals_total = conn.execute(
+                "SELECT COUNT(*) FROM evaluations WHERE is_latest=1"
+            ).fetchone()[0]
+            unpublished = conn.execute(
+                "SELECT COUNT(*) FROM evaluations WHERE published_to_zendesk=0 AND is_latest=1"
+            ).fetchone()[0]
+            recent_runs = conn.execute(
+                "SELECT * FROM runs ORDER BY id DESC LIMIT 5"
             ).fetchall()
+            return {
+                "tickets_total": tickets_total,
+                "evals_total": evals_total,
+                "unpublished": unpublished,
+                "recent_runs": [dict(r) for r in recent_runs],
+            }
+        finally:
+            conn.close()
+
+    def get_audit_data(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list[sqlite3.Row]:
+        """Return tickets with their evaluation/publication status for auditing."""
+        conn = self._connect()
+        try:
+            query = """
+                SELECT
+                    t.ticket_id,
+                    t.closed_at,
+                    t.channel,
+                    t.agent_name,
+                    CASE WHEN e.id IS NULL THEN 0 ELSE 1 END AS evaluated,
+                    CASE WHEN e.published_to_zendesk=1 THEN 1 ELSE 0 END AS published,
+                    e.aggregate_score,
+                    e.performance_band,
+                    e.prompt_version
+                FROM tickets t
+                LEFT JOIN evaluations e ON e.ticket_id = t.ticket_id AND e.is_latest=1
+                WHERE 1=1
+            """
+            params: list = []
+            if from_date:
+                query += " AND t.closed_at >= ?"
+                params.append(from_date)
+            if to_date:
+                query += " AND t.closed_at <= ?"
+                params.append(to_date + "T23:59:59Z")
+            query += " ORDER BY t.closed_at DESC"
+            return conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+
+    def get_evaluations_in_range(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list[sqlite3.Row]:
+        """Return latest evaluations for tickets closed in the given date range."""
+        conn = self._connect()
+        try:
+            query = """
+                SELECT e.eval_json_path FROM evaluations e
+                JOIN tickets t ON t.ticket_id = e.ticket_id
+                WHERE e.is_latest=1
+            """
+            params: list = []
+            if from_date:
+                query += " AND t.closed_at >= ?"
+                params.append(from_date)
+            if to_date:
+                query += " AND t.closed_at <= ?"
+                params.append(to_date + "T23:59:59Z")
+            query += " ORDER BY t.closed_at DESC"
+            return conn.execute(query, params).fetchall()
         finally:
             conn.close()
 

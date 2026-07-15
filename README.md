@@ -19,6 +19,9 @@ An AI-powered support quality evaluation system for Hevo Data's Zendesk tickets.
   - [run](#run--full-pipeline)
   - [re-evaluate](#re-evaluate--historical-re-scoring)
   - [publish](#publish--push-to-zendesk)
+  - [status](#status--pipeline-health-check)
+  - [audit](#audit--find-gaps)
+  - [export](#export--csv-without-publishing)
 - [Daily Scheduling](#daily-scheduling)
 - [Configuration Reference](#configuration-reference)
 - [Evaluation Metrics](#evaluation-metrics)
@@ -213,24 +216,34 @@ python src/main.py run
 
 | Flag | Description |
 |---|---|
-| `--fetch-only` | Only fetch and save tickets to disk. Skip evaluation and write-back. Useful for pre-loading tickets before evaluating. |
+| `--fetch-only` | Only fetch and save tickets to disk. Skip evaluation and write-back. |
 | `--force` | Ignore the "already evaluated" cache. Re-evaluates every ticket even if it was previously processed with the same prompt version. |
+| `--from DATE` | **Backfill mode.** Bypass the cursor and fetch tickets closed on/after `DATE` (`YYYY-MM-DD`). The cursor is **not** advanced, so normal daily runs continue from where they were. |
+| `--to DATE` | Upper bound for backfill (used with `--from`). Tickets closed after this date are excluded. |
 
 **Examples:**
 
 ```bash
-# Standard daily run
+# Standard daily run (uses cursor from last run)
 python src/main.py run
 
-# Fetch tickets today but don't evaluate yet
+# Fetch tickets without evaluating (useful for pre-loading)
 python src/main.py run --fetch-only
 
-# Force re-run everything (e.g. after a bug fix)
+# Force re-evaluate every ticket (e.g. after fixing a scoring bug)
 python src/main.py run --force
+
+# Backfill: fetch + evaluate + publish tickets closed in January
+python src/main.py run --from 2025-01-01 --to 2025-01-31
+
+# Backfill from a date with no upper bound (fetches everything since then)
+python src/main.py run --from 2025-01-01
 ```
 
-**How offset tracking works:**
+**How incremental tracking works:**
 Each run saves a Zendesk cursor to `data/state.json`. The next run picks up exactly where the last left off — no duplicate processing. On the very first run, it fetches from `state.initial_fetch_from` in `config.yaml`.
+
+Backfill runs (`--from`) intentionally **do not** modify the cursor so your daily scheduled runs are unaffected.
 
 ---
 
@@ -251,7 +264,7 @@ python src/main.py re-evaluate --all
 
 | Flag | Description |
 |---|---|
-| `--from DATE` | Re-evaluate tickets fetched on or after this date (`YYYY-MM-DD`) |
+| `--from DATE` | Re-evaluate tickets closed on or after this date (`YYYY-MM-DD`) |
 | `--to DATE` | Upper date bound, used with `--from` |
 | `--tickets IDS` | Comma-separated list of specific ticket IDs |
 | `--all` | Re-evaluate every ticket currently on disk |
@@ -294,13 +307,144 @@ python src/main.py publish --unpublished
 
 | Flag | Description |
 |---|---|
-| `--unpublished` | Re-push all evaluations that failed to write to Zendesk (e.g. due to a previous API error or missing field IDs) |
+| `--unpublished` | Re-push all evaluations that haven't been written to Zendesk yet (e.g. due to a previous API error or missing field IDs). |
+| `--from DATE` | Only publish evaluations for tickets closed on/after `DATE` (`YYYY-MM-DD`). |
+| `--to DATE` | Only publish evaluations for tickets closed on/before `DATE` (`YYYY-MM-DD`). |
+| `--dry-run` | Preview what *would* be pushed to Zendesk without making any API calls. Logs every ticket ID and field value. |
 
-**Example:**
+**Examples:**
 
 ```bash
-# After adding Zendesk field IDs to config.yaml for the first time
+# Re-push all unpublished evaluations
 python src/main.py publish --unpublished
+
+# After adding Zendesk field IDs to config.yaml, publish only March tickets
+python src/main.py publish --unpublished --from 2025-03-01 --to 2025-03-31
+
+# Preview before committing to a bulk publish
+python src/main.py publish --unpublished --dry-run
+
+# Dry run scoped to a date window
+python src/main.py publish --unpublished --from 2025-01-01 --to 2025-03-31 --dry-run
+```
+
+---
+
+### `status` — Pipeline health check
+
+Prints a live summary of the pipeline's state: last run time, cursor status, ticket and evaluation counts, and recent run history.
+
+```bash
+python src/main.py status
+```
+
+**Example output:**
+
+```
+=== Ticket Evaluator Status ===
+  Last run:            2026-04-21T08:00:03.412+00:00
+  Last successful run: 2026-04-21T08:00:41.889+00:00
+  Last ticket closed:  2026-04-20T18:43:11+00:00
+  Cursor set:          yes
+
+  Tickets in DB:       1243
+  Evaluations (latest):1241
+  Unpublished:         0
+
+  Last run stats: mode=incremental fetched=7 evaluated=7 published=7 errors=0
+
+  Recent runs (last 5):
+    [42] 2026-04-21T08:00:03  mode=incremental  fetched=7 eval=7 pub=7 err=0  completed=2026-04-21T08:00:41
+    [41] 2026-04-20T08:00:02  mode=incremental  fetched=3 eval=3 pub=3 err=0  completed=2026-04-20T08:00:29
+    ...
+```
+
+Use this as a quick sanity check before or after running any command.
+
+---
+
+### `audit` — Find gaps
+
+Scans the database to find tickets that were fetched but not evaluated, and evaluations that were not published to Zendesk. Accepts an optional date window to scope the check.
+
+```bash
+python src/main.py audit [--from DATE] [--to DATE]
+```
+
+**Options:**
+
+| Flag | Description |
+|---|---|
+| `--from DATE` | Only audit tickets closed on/after `DATE` (`YYYY-MM-DD`). |
+| `--to DATE` | Only audit tickets closed on/before `DATE` (`YYYY-MM-DD`). |
+
+**Examples:**
+
+```bash
+# Full audit across all tickets
+python src/main.py audit
+
+# Audit just last month to check for gaps before the monthly report
+python src/main.py audit --from 2025-03-01 --to 2025-03-31
+```
+
+**Example output:**
+
+```
+=== Audit (186 tickets total) ===
+  Unevaluated: 3
+  Evaluated but unpublished: 2
+  Complete (evaluated + published): 181
+
+Unevaluated tickets (3):
+  ticket_id    closed_at              channel    agent
+  67415        2025-03-14T11:23:00    email      Priya S
+  67502        2025-03-19T09:10:00    chat       Amit K
+  ...
+
+Unpublished evaluations (2):
+  ticket_id    closed_at              score    band
+  67311        2025-03-08T14:05:00    3.42     Good
+  67389        2025-03-12T16:30:00    2.85     Good
+```
+
+After reviewing the unevaluated tickets, run `re-evaluate --tickets <ids>` to process them. For unpublished evaluations, run `publish --unpublished`.
+
+---
+
+### `export` — CSV without publishing
+
+Exports evaluation results to CSV for a given date range **without** making any Zendesk API calls. Useful for generating reports or sending data to a BI tool independently of the publish step.
+
+```bash
+python src/main.py export [--from DATE] [--to DATE] [--format wide|long|both]
+```
+
+**Options:**
+
+| Flag | Description |
+|---|---|
+| `--from DATE` | Export evaluations for tickets closed on/after `DATE` (`YYYY-MM-DD`). |
+| `--to DATE` | Export evaluations for tickets closed on/before `DATE` (`YYYY-MM-DD`). |
+| `--format` | Output format: `wide` (1 row/ticket), `long` (1 row/metric), or `both` (default). |
+
+**Examples:**
+
+```bash
+# Export everything (all dates, both formats)
+python src/main.py export
+
+# Export Q1 in wide format only (good for a spreadsheet)
+python src/main.py export --from 2025-01-01 --to 2025-03-31 --format wide
+
+# Export March in long format for a BI tool pivot
+python src/main.py export --from 2025-03-01 --to 2025-03-31 --format long
+```
+
+Files are written to `data/exports/` with a filename that includes the date range, e.g.:
+```
+data/exports/2025-01-01_to_2025-03-31_evaluations_wide.csv
+data/exports/2025-01-01_to_2025-03-31_evaluations_long.csv
 ```
 
 ---
@@ -351,6 +495,9 @@ All settings live in `config/config.yaml`. Environment variable references (`${V
 | `api_token` | Zendesk API token | `${ZENDESK_API_TOKEN}` |
 | `groups` | List of `{id, name}` groups to fetch tickets from | — |
 | `ticket_status` | Only fetch tickets with this status | `closed` |
+| `ticket_types` | List of ticket types to include, e.g. `[question, incident]`. Empty list = all types. | `[]` |
+| `tags_include` | Ticket must have **all** of these tags to be fetched. Empty list = no filter. | `[]` |
+| `tags_exclude` | Ticket must have **none** of these tags to be fetched. Empty list = no filter. | `[]` |
 | `rate_limit.regular_requests_per_minute` | Cap for comments/metrics/write API calls | `400` |
 | `rate_limit.export_requests_per_minute` | Cap for incremental export (Zendesk limit: 10/min) | `8` |
 
@@ -418,7 +565,7 @@ Each ticket is scored across 18 metrics on a **1–4 scale** (or N/A):
 | 2 | Roadmap to Resolution | Was a clear action plan communicated upfront? |
 | 3 | Correct SLA Expectations Set | Were realistic timelines communicated? |
 | 4 | Root Cause Analysis | Was the WHY of the issue explained? |
-| 5 | Resolution Accuracy | Was the solution correct and complete? |
+| 5 |x`| Was the solution correct and complete? |
 | 6 | Detailed Resolution Steps | Were steps clear, numbered, and actionable? |
 | 7 | All Concerns Addressed | Were all customer questions answered? |
 | 8 | Timely First Response | Was FRT SLA met? (**overridden from Zendesk metrics**) |
@@ -513,25 +660,27 @@ Generated after each run in `data/exports/`:
 
 ## Data Directory Layout
 
+Directories are named by the **ticket's closed date**, not the date it was fetched. This means `re-evaluate --from 2025-03-01` and `audit --from 2025-03-01` correctly filter by when the ticket was actually resolved.
+
 ```
 data/
 ├── state.json                        # Run cursor — do not edit manually
 ├── evaluations.db                    # SQLite database
 ├── tickets/
-│   ├── 2026-03-30/
+│   ├── 2026-03-30/                   # ← ticket closed on this date
 │   │   ├── Ticket_67207.json         # Raw Zendesk ticket (metadata + metrics + comments)
 │   │   └── Ticket_67258.json
 │   └── 2026-03-31/
 │       └── Ticket_67301.json
 ├── evaluations/
-│   ├── 2026-03-30/
+│   ├── 2026-03-30/                   # ← ticket closed on this date
 │   │   ├── eval_67207_v1.json        # Evaluation result with all 18 metric scores
 │   │   └── eval_67258_v1.json
 │   └── 2026-03-31/
 │       └── eval_67301_v1.json
 └── exports/
-    ├── 2026-03-30_evaluations_wide.csv
-    └── 2026-03-30_evaluations_long.csv
+    ├── 2025-01-01_to_2025-03-31_evaluations_wide.csv
+    └── 2025-01-01_to_2025-03-31_evaluations_long.csv
 ```
 
 ---

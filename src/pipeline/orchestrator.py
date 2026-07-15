@@ -15,6 +15,7 @@ from src.pipeline.publisher import Publisher
 from src.storage.database import Database
 from src.storage.file_store import FileStore
 from src.storage.state import RunState
+from src.utils.exclusions import exclusion_reason
 from src.utils.notifier import Notifier, RunSummary
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class PipelineStats:
     evaluated: int = 0
     published: int = 0
     errors: int = 0
+    excluded: int = 0  # tickets skipped by QC exclusion rules (not errors)
     error_details: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -37,6 +39,7 @@ class PipelineStats:
             "evaluated": self.evaluated,
             "published": self.published,
             "errors": self.errors,
+            "excluded": self.excluded,
         }
 
 
@@ -51,22 +54,43 @@ class Orchestrator:
         self._publisher = Publisher(config)
         self._notifier = Notifier(config.notifications)
 
-    async def run(self, force: bool = False) -> PipelineStats:
-        """Run the full incremental pipeline: fetch → evaluate → publish."""
-        stats = PipelineStats(mode="incremental")
+    async def run(
+        self,
+        force: bool = False,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> PipelineStats:
+        """Run the full pipeline.
+
+        Without dates: incremental fetch using cursor (normal daily run).
+        With from_date: backfill mode — fetches from that date, does NOT advance cursor.
+        """
+        is_backfill = bool(from_date)
+        mode = f"backfill:{from_date}" if is_backfill else "incremental"
+        stats = PipelineStats(mode=mode)
         run_id = self._db.start_run(
             started_at=stats.started_at.isoformat(),
-            mode="incremental",
-            cursor_used=self._state.zendesk_cursor,
+            mode=mode,
+            cursor_used=None if is_backfill else self._state.zendesk_cursor,
         )
-        self._state.mark_run_started()
+        if not is_backfill:
+            self._state.mark_run_started()
 
         try:
             # Stage 1: Fetch
             logger.info("=== Stage 1: Fetching tickets ===")
-            ticket_data_list = await self._fetcher.fetch_all(self._state, force=force)
+            ticket_data_list = await self._fetcher.fetch_all(
+                self._state,
+                force=force,
+                from_date=from_date,
+                to_date=to_date,
+                update_cursor=not is_backfill,
+            )
+            # Defense-in-depth: fetch already filters exclusions, but this
+            # also covers tickets fetched before the rules existed.
+            ticket_data_list = self._filter_excluded(ticket_data_list, stats)
             stats.fetched = len(ticket_data_list)
-            logger.info("Fetched %d tickets", stats.fetched)
+            logger.info("Fetched %d tickets (%d excluded)", stats.fetched, stats.excluded)
 
             if not ticket_data_list:
                 logger.info("No new tickets to evaluate")
@@ -118,6 +142,29 @@ class Orchestrator:
             raise
         return stats
 
+    def _filter_excluded(
+        self, ticket_data_list: list[dict], stats: PipelineStats
+    ) -> list[dict]:
+        """Drop tickets matching QC exclusion rules; count them in stats.excluded.
+
+        Excluded tickets are NOT errors — they are intentionally out of QC scope
+        (duplicates, alerts, spam, side-conversation reviews, unassigned/bot).
+        """
+        excl = self._config.zendesk.exclusions
+        kept: list[dict] = []
+        for ticket_data in ticket_data_list:
+            ticket = (ticket_data.get("Ticket_Metadata") or {}).get("ticket") or {}
+            reason = exclusion_reason(ticket, excl)
+            if reason:
+                logger.info(
+                    "Ticket %s excluded from QC (%s) — skipping evaluation",
+                    ticket.get("id"), reason,
+                )
+                stats.excluded += 1
+            else:
+                kept.append(ticket_data)
+        return kept
+
     async def re_evaluate(
         self,
         from_date: Optional[str] = None,
@@ -151,8 +198,10 @@ class Orchestrator:
                 import json
                 ticket_data_list.append(json.loads(path.read_text()))
 
+        # Skip tickets matching QC exclusion rules (duplicate/alert/spam/etc.)
+        ticket_data_list = self._filter_excluded(ticket_data_list, stats)
         stats.fetched = len(ticket_data_list)
-        logger.info("Re-evaluating %d tickets", stats.fetched)
+        logger.info("Re-evaluating %d tickets (%d excluded)", stats.fetched, stats.excluded)
 
         results = await self._evaluator.evaluate_all(ticket_data_list, force=True)
         stats.evaluated = len(results)
@@ -165,12 +214,33 @@ class Orchestrator:
         await self._finish(stats, run_id)
         return stats
 
-    async def publish_unpublished(self) -> PipelineStats:
-        """Re-publish all evaluations that failed to push to Zendesk."""
+    async def purge_excluded(
+        self,
+        execute: bool = False,
+        clear_zendesk: bool = True,
+        ticket_ids: Optional[list[int]] = None,
+    ):
+        """Purge QC-excluded tickets from local data (+ clear Zendesk QC fields)."""
+        from src.pipeline.purger import Purger
+        return await Purger(self._config).purge(
+            execute=execute, clear_zendesk=clear_zendesk, ticket_ids=ticket_ids
+        )
+
+    async def publish_unpublished(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> PipelineStats:
+        """Re-publish evaluations that failed to push to Zendesk.
+
+        from_date/to_date filter by ticket closed_at.
+        dry_run=True logs what would be published without making API calls.
+        """
         stats = PipelineStats(mode="publish-unpublished")
         run_id = self._db.start_run(stats.started_at.isoformat(), "publish-unpublished")
 
-        rows = self._db.get_unpublished_evaluations()
+        rows = self._db.get_unpublished_evaluations(from_date=from_date, to_date=to_date)
         results = []
         for row in rows:
             eval_path = row["eval_json_path"]
@@ -184,12 +254,43 @@ class Orchestrator:
                 except Exception as exc:
                     logger.error("Could not load eval %s: %s", eval_path, exc)
 
-        published, errors = await self._publisher.publish_all(results)
+        published, errors = await self._publisher.publish_all(results, dry_run=dry_run)
         stats.evaluated = len(results)
         stats.published = published
         stats.errors = errors
         await self._finish(stats, run_id)
         return stats
+
+    def get_status(self) -> dict:
+        """Return pipeline health summary for the status command."""
+        import json as _json
+        stats = self._db.get_summary_stats()
+        state_data = self._state._data
+        return {
+            "last_run_at": state_data.get("last_run_at"),
+            "last_successful_run_at": state_data.get("last_successful_run_at"),
+            "last_ticket_updated_at": state_data.get("last_ticket_updated_at"),
+            "cursor_set": bool(state_data.get("zendesk_cursor")),
+            "last_run_stats": state_data.get("last_run_stats", {}),
+            **stats,
+        }
+
+    def get_audit(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list:
+        """Return per-ticket audit rows for the audit command."""
+        return self._db.get_audit_data(from_date=from_date, to_date=to_date)
+
+    def export_csv(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        fmt: str = "both",
+    ) -> int:
+        """Export evaluations to CSV for the export command."""
+        return self._publisher.export_csv_for_range(from_date=from_date, to_date=to_date, fmt=fmt)
 
     # ------------------------------------------------------------------
 
