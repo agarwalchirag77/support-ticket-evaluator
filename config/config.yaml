@@ -24,6 +24,7 @@ zendesk:
     form_categories:
       duplicate: [47659393352345]         # Duplicate-ticket form
       feature_request: [49138803315225]   # FQ (feature request) form
+      abandoned: [47659284201497]         # SPAM/ABANDONED form
     exclude_channels: [side_conversation]   # review tickets via side conversations
     exclude_unassigned: true                # Cerebra-bot tickets have no assignee
   rate_limit:
@@ -46,12 +47,12 @@ llm:
     temperature: 0
     max_input_tokens: 90000
   rate_limit:
-    requests_per_minute: 50
-    tokens_per_minute: 100000
+    requests_per_minute: 90
+    tokens_per_minute: 250000
 
 pipeline:
-  concurrent_fetches: 3                   # parallel Zendesk comment/metric calls
-  concurrent_evaluations: 6              # parallel LLM calls
+  concurrent_fetches: 2                   # parallel Zendesk comment/metric calls
+  concurrent_evaluations: 10             # parallel LLM calls
   queue_size: 50
 
 evaluation:

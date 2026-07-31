@@ -48,7 +48,7 @@ class ZendeskClient:
         self._exclusions = zd.exclusions
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(headers=self._headers, timeout=30.0)
+        return httpx.AsyncClient(headers=self._headers, timeout=90.0)
 
     # ------------------------------------------------------------------
     # Incremental ticket export

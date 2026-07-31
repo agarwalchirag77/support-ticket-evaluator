@@ -17,6 +17,13 @@ Rate each metric on a scale of 1–4:
   1 = Poor (not done or done incorrectly)
   N/A = Not applicable to this ticket type
 ---
+**L1→L2 REFERRAL RULE (applies to METRIC 4, 5, and 6):**
+A ticket is "referred to L2" when the L1 agent could not debug/resolve it at L1 and handed it to L2 for deeper investigation — i.e., a new L2/email ticket was raised and the original ticket handed off. Detect this from EITHER signal:
+  • Tags: the ticket carries a referral tag such as `referred_to_l2`, `_referred_to_l2`, `__referred_to_l2__`, `referred_to_l2__`, or `cerebra_na_-_l2_ticket`; OR
+  • Conversation: the agent tells the customer the issue is being escalated to L2 / a new email ticket has been raised (often with a ticket ID), and no resolution is delivered in this thread.
+
+When a ticket is referred to L2, the actual debugging, root cause, and fix happen in the L2 thread — NOT here. Therefore, for a referred ticket, rate **METRIC 4 (RCA), METRIC 5 (Resolution Accuracy), and METRIC 6 (Detailed Resolution Steps) as N/A** — do NOT penalize the L1 agent for the absence of RCA, a confirmed resolution, or resolution steps that legitimately belong to L2. (All other metrics — including first response, SLA expectation-setting, escalation judgment, tone, and whether the agent clearly communicated the escalation — are still scored normally.)
+---
 METRIC 1: CLARIFYING QUESTIONS
 Definition: Before diving into a solution, did the agent ask targeted questions to fully understand the customer's issue?
 Look for: Questions that clarify environment (connector type, pipeline name, error message, frequency of issue), questions that distinguish between similar issues, confirmation of customer's expected vs actual behavior.
@@ -51,7 +58,7 @@ Rating 4: RCA clearly identified and communicated in customer-friendly language.
 Rating 3: RCA shared but incomplete or too technical/jargon-heavy for the customer.
 Rating 2: Resolution provided but RCA not explained or only vaguely referenced.
 Rating 1: No RCA provided; customer doesn't know why the issue happened.
-N/A: Issue was a user error where RCA is obvious (e.g., wrong credentials), OR ticket is a query/information request (customer is asking how something works, requesting data, or seeking guidance — not reporting a problem, so there is no root cause to identify).
+N/A: Issue was a user error where RCA is obvious (e.g., wrong credentials), OR ticket is a query/information request (customer is asking how something works, requesting data, or seeking guidance — not reporting a problem, so there is no root cause to identify), OR the ticket was referred from L1 to L2 (see L1→L2 REFERRAL RULE above — RCA belongs to the L2 thread).
 ---
 METRIC 5: RESOLUTION ACCURACY
 Definition: Was the solution provided actually correct and did it fully resolve the customer's stated problem?
@@ -60,6 +67,7 @@ Rating 4: Resolution fully correct; customer confirmed issue resolved.
 Rating 3: Resolution mostly correct but required minor follow-up or adjustment.
 Rating 2: Resolution partially addressed the issue; core problem persisted.
 Rating 1: Resolution was incorrect or irrelevant; issue not resolved.
+N/A: The ticket was referred from L1 to L2 (see L1→L2 REFERRAL RULE above) — the resolution is delivered in the L2 thread, so there is no L1 resolution to judge here.
 ---
 METRIC 6: DETAILED RESOLUTION STEPS PROVIDED
 Definition: Were the steps to resolve the issue clear, complete, and actionable?
@@ -68,7 +76,7 @@ Rating 4: Steps are complete, sequenced, and self-sufficient. Customer could fol
 Rating 3: Steps provided but missing detail in one area (e.g., skipped a prerequisite).
 Rating 2: Steps too high-level or assumed too much customer knowledge.
 Rating 1: No steps provided, or steps were incorrect/misleading.
-N/A: Ticket is a query/information request where the agent's role is to explain, share data, or provide guidance — not to walk the customer through a sequence of steps to resolve a problem.
+N/A: Ticket is a query/information request where the agent's role is to explain, share data, or provide guidance — not to walk the customer through a sequence of steps to resolve a problem, OR the ticket was referred from L1 to L2 (see L1→L2 REFERRAL RULE above — resolution steps belong to the L2 thread).
 ---
 METRIC 7: ALL CONCERNS ADDRESSED
 Definition: Did the agent address every question or issue the customer raised, not just the primary one?
