@@ -6,7 +6,12 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON="$(which python3)"
+# Prefer the project virtualenv's python (recommended on the VM); fall back to system python3.
+if [[ -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+    PYTHON="$PROJECT_DIR/.venv/bin/python"
+else
+    PYTHON="$(which python3)"
+fi
 CRON_LOG="$PROJECT_DIR/logs/cron.log"
 CRON_TIME="0 8 * * *"   # Daily at 8:00 AM — edit to change schedule
 CRON_CMD="$CRON_TIME cd \"$PROJECT_DIR\" && $PYTHON src/main.py run >> \"$CRON_LOG\" 2>&1"

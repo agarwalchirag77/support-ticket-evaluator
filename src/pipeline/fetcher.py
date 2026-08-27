@@ -13,7 +13,7 @@ from typing import Optional
 
 from src.clients.zendesk import ZendeskClient
 from src.config import AppConfig
-from src.storage.database import Database
+from src.storage.factory import make_database
 from src.storage.file_store import FileStore
 from src.storage.state import RunState
 
@@ -25,7 +25,7 @@ class Fetcher:
         self._config = config
         self._zendesk = ZendeskClient(config)
         self._file_store = FileStore(config)
-        self._db = Database(config.output.database)
+        self._db = make_database(config)
 
     async def fetch_all(
         self,

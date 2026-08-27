@@ -14,7 +14,7 @@ from src.clients.openai_client import OpenAIClient
 from src.config import AppConfig
 from src.models.evaluation import EvaluationResult
 from src.models.ticket import RawTicket
-from src.storage.database import Database
+from src.storage.factory import make_database
 from src.storage.file_store import FileStore
 from src.utils.sla import patch_sla_and_ratings
 from src.utils.token_counter import estimate_tokens, truncate_ticket_json
@@ -26,7 +26,7 @@ class Evaluator:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
         self._file_store = FileStore(config)
-        self._db = Database(config.output.database)
+        self._db = make_database(config)
         self._prompt = self._load_prompt()
         self._llm = self._build_llm_client()
 

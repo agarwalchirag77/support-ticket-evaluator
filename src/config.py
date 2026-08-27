@@ -193,6 +193,22 @@ class OutputConfig:
 
 
 @dataclass
+class StorageConfig:
+    backend: str = "sqlite"  # sqlite (local dev) | snowflake (remote VM)
+
+
+@dataclass
+class SnowflakeConfig:
+    account: str = ""
+    user: str = ""
+    password: str = ""
+    warehouse: str = ""
+    database: str = ""
+    schema: str = ""
+    role: str = ""
+
+
+@dataclass
 class EmailNotificationConfig:
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -238,6 +254,8 @@ class AppConfig:
     output: OutputConfig
     notifications: NotificationConfig
     logging: LoggingConfig
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    snowflake: SnowflakeConfig = field(default_factory=SnowflakeConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +472,20 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         console=_bool(lg.get("console"), True),
     )
 
+    stg = raw.get("storage", {}) or {}
+    storage = StorageConfig(backend=(stg.get("backend") or "sqlite").lower())
+
+    sf = raw.get("snowflake", {}) or {}
+    snowflake = SnowflakeConfig(
+        account=sf.get("account", ""),
+        user=sf.get("user", ""),
+        password=sf.get("password", ""),
+        warehouse=sf.get("warehouse", ""),
+        database=sf.get("database", ""),
+        schema=sf.get("schema", ""),
+        role=sf.get("role", ""),
+    )
+
     return AppConfig(
         zendesk=zendesk,
         llm=llm,
@@ -464,4 +496,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         output=output,
         notifications=notifications,
         logging=logging_cfg,
+        storage=storage,
+        snowflake=snowflake,
     )

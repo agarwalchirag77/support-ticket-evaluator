@@ -67,7 +67,12 @@ CREATE TABLE IF NOT EXISTS runs (
     evaluated       INTEGER DEFAULT 0,
     published       INTEGER DEFAULT 0,
     errors          INTEGER DEFAULT 0,
-    cursor_used     TEXT
+    excluded        INTEGER DEFAULT 0,
+    cursor_used     TEXT,
+    window_from     TEXT,
+    window_to       TEXT,
+    error_details   TEXT,
+    host            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_evaluations_ticket_id ON evaluations(ticket_id);
@@ -104,6 +109,13 @@ class Database:
     def _init_schema(self) -> None:
         conn = self._connect()
         conn.executescript(SCHEMA)
+        # Idempotent migration: add newer runs columns to pre-existing DBs.
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        for col in ("excluded", "window_from", "window_to", "error_details", "host"):
+            if col not in existing:
+                default = " DEFAULT 0" if col == "excluded" else ""
+                coltype = "INTEGER" if col == "excluded" else "TEXT"
+                conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {coltype}{default}")
         conn.commit()
         conn.close()
         logger.debug("Database schema initialised at %s", self.db_path)
@@ -407,12 +419,19 @@ class Database:
         evaluated: int,
         published: int,
         errors: int,
+        excluded: int = 0,
+        window_from: Optional[str] = None,
+        window_to: Optional[str] = None,
+        error_details: Optional[str] = None,
+        host: Optional[str] = None,
     ) -> None:
         with self._cursor() as cur:
             cur.execute(
                 """
-                UPDATE runs SET completed_at=?, fetched=?, evaluated=?, published=?, errors=?
+                UPDATE runs SET completed_at=?, fetched=?, evaluated=?, published=?, errors=?,
+                                excluded=?, window_from=?, window_to=?, error_details=?, host=?
                 WHERE id=?
                 """,
-                (completed_at, fetched, evaluated, published, errors, run_id),
+                (completed_at, fetched, evaluated, published, errors, excluded,
+                 window_from, window_to, error_details, host, run_id),
             )

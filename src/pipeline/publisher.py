@@ -12,7 +12,7 @@ from typing import Optional
 from src.clients.zendesk import ZendeskClient
 from src.config import AppConfig
 from src.models.evaluation import EvaluationResult
-from src.storage.database import Database
+from src.storage.factory import make_database
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _find_tagger_option(options: list[str], value: str) -> Optional[str]:
 class Publisher:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
-        self._db = Database(config.output.database)
+        self._db = make_database(config)
         self._zendesk = ZendeskClient(config)
         # Cache: field_id (int) -> list of tagger option strings (empty = not a tagger)
         self._tagger_options: dict[int, list[str]] = {}

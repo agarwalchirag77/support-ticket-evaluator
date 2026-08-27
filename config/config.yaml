@@ -136,6 +136,22 @@ output:
   database: data/evaluations.db
   export_csv: true
 
+# Structured storage backend for the queryable DB + cursor/run-log.
+#   sqlite    — local file (data/evaluations.db + data/state.json)  [local dev default]
+#   snowflake — Snowflake tables (set on the remote VM)
+storage:
+  backend: sqlite
+
+# Only used when storage.backend == snowflake. Credentials come from env (.env).
+snowflake:
+  account: ${SNOWFLAKE_ACCOUNT}
+  user: ${SNOWFLAKE_USER}
+  password: ${SNOWFLAKE_PASSWORD}
+  warehouse: ${SNOWFLAKE_WAREHOUSE}
+  database: ${SNOWFLAKE_DATABASE}
+  schema: ${SNOWFLAKE_SCHEMA}
+  role: ${SNOWFLAKE_ROLE}
+
 notifications:
   method: email                          # email | slack_webhook
   email:

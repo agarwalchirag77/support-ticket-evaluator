@@ -1,4 +1,10 @@
-"""Persistent pipeline state (Zendesk cursor and run metadata)."""
+"""Persistent pipeline state (Zendesk cursor and run metadata).
+
+Two backends, chosen by ``config.storage.backend``:
+- sqlite  → a local JSON file (``data/state.json``)  [local dev, unchanged behavior]
+- snowflake → the ``pipeline_state`` KV table (via the injected db), so the remote VM keeps
+  no local state file and the incremental cursor survives redeploys.
+"""
 
 from __future__ import annotations
 
@@ -22,14 +28,31 @@ _EMPTY: dict = {
 
 
 class RunState:
-    def __init__(self, config: AppConfig) -> None:
-        self._path = Path(config.state.file)
+    def __init__(self, config: AppConfig, db=None) -> None:
         self._initial_fetch_from = config.state.initial_fetch_from
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._backend = (config.storage.backend or "sqlite").lower()
+        self._db = db
+        if self._backend == "snowflake":
+            self._path = None
+        else:
+            self._path = Path(config.state.file)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
         self._data: dict = self._load()
 
+    # ------------------------------------------------------------------
+    # Backend-aware load / save
+    # ------------------------------------------------------------------
+
     def _load(self) -> dict:
-        if self._path.exists():
+        if self._backend == "snowflake":
+            data = {**_EMPTY}
+            for key in _EMPTY:
+                val = self._db.get_state(key)
+                if val is None:
+                    continue
+                data[key] = json.loads(val) if key == "last_run_stats" else val
+            return data
+        if self._path and self._path.exists():
             try:
                 return {**_EMPTY, **json.loads(self._path.read_text())}
             except (json.JSONDecodeError, OSError) as exc:
@@ -37,6 +60,10 @@ class RunState:
         return {**_EMPTY}
 
     def _save(self) -> None:
+        if self._backend == "snowflake":
+            for key, val in self._data.items():
+                self._db.set_state(key, json.dumps(val) if key == "last_run_stats" else val)
+            return
         self._path.write_text(json.dumps(self._data, indent=2))
 
     # ------------------------------------------------------------------

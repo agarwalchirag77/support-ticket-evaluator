@@ -12,7 +12,7 @@ from src.config import AppConfig
 from src.pipeline.evaluator import Evaluator
 from src.pipeline.fetcher import Fetcher
 from src.pipeline.publisher import Publisher
-from src.storage.database import Database
+from src.storage.factory import make_database
 from src.storage.file_store import FileStore
 from src.storage.state import RunState
 from src.utils.exclusions import exclusion_reason
@@ -46,13 +46,14 @@ class PipelineStats:
 class Orchestrator:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
-        self._db = Database(config.output.database)
-        self._state = RunState(config)
+        self._db = make_database(config)
+        self._state = RunState(config, self._db)
         self._file_store = FileStore(config)
         self._fetcher = Fetcher(config)
         self._evaluator = Evaluator(config)
         self._publisher = Publisher(config)
         self._notifier = Notifier(config.notifications)
+        self._run_window_from: Optional[str] = None
 
     async def run(
         self,
@@ -67,6 +68,10 @@ class Orchestrator:
         """
         is_backfill = bool(from_date)
         mode = f"backfill:{from_date}" if is_backfill else "incremental"
+        # Window "from" for the run log: the from_date for a backfill, else where the last
+        # run left off (prior last_ticket_updated_at, or the initial fetch date on first run).
+        self._run_window_from = from_date if is_backfill else (
+            self._state._data.get("last_ticket_updated_at") or self._config.state.initial_fetch_from)
         stats = PipelineStats(mode=mode)
         run_id = self._db.start_run(
             started_at=stats.started_at.isoformat(),
@@ -295,10 +300,20 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _finish(self, stats: PipelineStats, run_id: int) -> None:
+        import socket
         completed = datetime.now(timezone.utc).isoformat()
+        # Run window: cursor position at start → latest ticket timestamp after fetch
+        # (records "what date to what date" the run covered).
+        window_from = getattr(self, "_run_window_from", None)
+        window_to = self._state._data.get("last_ticket_updated_at")
         self._db.complete_run(
             run_id, completed,
             stats.fetched, stats.evaluated, stats.published, stats.errors,
+            excluded=stats.excluded,
+            window_from=window_from,
+            window_to=window_to,
+            error_details=("; ".join(stats.error_details)[:4000] or None) if stats.error_details else None,
+            host=socket.gethostname(),
         )
         self._state.mark_run_complete(stats.to_dict())
         summary = RunSummary(

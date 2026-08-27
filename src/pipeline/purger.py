@@ -27,7 +27,7 @@ from typing import Optional
 
 from src.clients.zendesk import ZendeskClient
 from src.config import AppConfig
-from src.storage.database import Database
+from src.storage.factory import make_database
 from src.storage.file_store import FileStore
 from src.utils.exclusions import exclusion_reason
 
@@ -50,7 +50,7 @@ class PurgeStats:
 class Purger:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
-        self._db = Database(config.output.database)
+        self._db = make_database(config)
         self._file_store = FileStore(config)
         self._zendesk = ZendeskClient(config)
         self._exports_dir = Path(config.output.exports_dir)
@@ -97,8 +97,14 @@ class Purger:
         self._scanned = scanned
         return matches
 
-    def _backup_db(self) -> Path:
-        """Checkpoint WAL and copy the sqlite file aside before deleting."""
+    def _backup_db(self):
+        """Checkpoint WAL and copy the sqlite file aside before deleting.
+
+        Only applies to the SQLite backend; on Snowflake, rely on Time Travel for recovery.
+        """
+        if (self._config.storage.backend or "sqlite").lower() != "sqlite":
+            logger.info("Snowflake backend — skipping local DB file backup (use Time Travel to recover).")
+            return None
         db_path = Path(self._config.output.database)
         conn = sqlite3.connect(db_path)
         try:
