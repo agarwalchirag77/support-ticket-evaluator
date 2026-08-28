@@ -1,0 +1,14 @@
+# logrotate config for the ticket-evaluator cron log.
+# Install:  sudo cp deploy/logrotate-ticket-evaluator /etc/logrotate.d/ticket-evaluator
+# Adjust the path below if the project is not at /opt/support-ticket-evaluator.
+# (The app itself already rotates logs/evaluator.log via a RotatingFileHandler;
+#  this covers the separate cron stdout/stderr log.)
+/opt/support-ticket-evaluator/logs/cron.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
