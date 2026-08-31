@@ -60,6 +60,8 @@ _DDL = [
         aggregate_score       FLOAT,
         performance_band      VARCHAR,
         evaluator_confidence  VARCHAR,
+        agent_name            VARCHAR,
+        ticket_summary        VARCHAR,
         frt_status            VARCHAR,
         frt_minutes           FLOAT,
         ttr_status            VARCHAR,
@@ -71,11 +73,15 @@ _DDL = [
         is_latest             NUMBER(1) DEFAULT 1
     )""",
     """CREATE TABLE IF NOT EXISTS metric_results (
-        id             NUMBER AUTOINCREMENT PRIMARY KEY,
-        evaluation_id  NUMBER NOT NULL,
-        metric_id      VARCHAR,
-        rating         VARCHAR,
-        rating_label   VARCHAR
+        id                NUMBER AUTOINCREMENT PRIMARY KEY,
+        evaluation_id     NUMBER NOT NULL,
+        metric_id         VARCHAR,
+        metric_name       VARCHAR,
+        rating            VARCHAR,
+        rating_label      VARCHAR,
+        evidence          VARCHAR,
+        reasoning         VARCHAR,
+        improvement_note  VARCHAR
     )""",
     """CREATE TABLE IF NOT EXISTS runs (
         id            NUMBER PRIMARY KEY,
@@ -165,6 +171,16 @@ class SnowflakeDatabase:
             conn = self._connection()
             for stmt in _DDL:
                 conn.cursor().execute(stmt)
+            # Idempotent migration: feedback-narrative columns on pre-existing tables.
+            for stmt in (
+                "ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS agent_name VARCHAR",
+                "ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS ticket_summary VARCHAR",
+                "ALTER TABLE metric_results ADD COLUMN IF NOT EXISTS metric_name VARCHAR",
+                "ALTER TABLE metric_results ADD COLUMN IF NOT EXISTS evidence VARCHAR",
+                "ALTER TABLE metric_results ADD COLUMN IF NOT EXISTS reasoning VARCHAR",
+                "ALTER TABLE metric_results ADD COLUMN IF NOT EXISTS improvement_note VARCHAR",
+            ):
+                conn.cursor().execute(stmt)
         logger.debug("Snowflake schema initialised (db=%s schema=%s)", self._cfg.database, self._cfg.schema)
 
     # ------------------------------------------------------------------
@@ -218,27 +234,36 @@ class SnowflakeDatabase:
                 """
                 INSERT INTO evaluations (
                     id, ticket_id, evaluated_at, prompt_version, llm_provider, llm_model,
-                    aggregate_score, performance_band, evaluator_confidence,
+                    aggregate_score, performance_band, evaluator_confidence, agent_name, ticket_summary,
                     frt_status, frt_minutes, ttr_status, ttr_minutes,
                     flags, eval_json_path, is_latest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     eval_id, int(result.ticket_id), result.evaluation_date,
                     result.prompt_version or "", result.llm_provider or "", result.llm_model or "",
                     result.aggregate_score.numeric if result.aggregate_score else None,
                     result.aggregate_score.band if result.aggregate_score else None,
-                    result.evaluator_confidence,
+                    result.evaluator_confidence, result.agent_name or "", result.ticket_summary or "",
                     frt.status if frt else None, frt.value_minutes if frt else None,
                     ttr.status if ttr else None, ttr.value_minutes if ttr else None,
                     json.dumps(result.flags), eval_json_path,
                 ),
             )
-            rows = [(eval_id, m.metric_id, str(m.rating), m.rating_label) for m in result.metrics]
+            rows = [
+                (eval_id, m.metric_id, m.metric_name, str(m.rating), m.rating_label,
+                 m.evidence, m.reasoning, m.improvement_note)
+                for m in result.metrics
+            ]
             if rows:
                 cur = self._connection().cursor()
                 cur.executemany(
-                    "INSERT INTO metric_results (evaluation_id, metric_id, rating, rating_label) VALUES (?, ?, ?, ?)",
+                    """
+                    INSERT INTO metric_results (
+                        evaluation_id, metric_id, metric_name, rating, rating_label,
+                        evidence, reasoning, improvement_note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     rows,
                 )
         return eval_id
@@ -314,6 +339,48 @@ class SnowflakeDatabase:
         if to_date:
             query += " AND t.closed_at <= ?"; params.append(to_date + "T23:59:59Z")
         query += " ORDER BY t.closed_at DESC"
+        return self._query(query, params)
+
+    def get_feedback_rows(self, agent_name=None, month=None, group_id=None, ticket_id=None) -> list[dict]:
+        """Flat (ticket × metric) rows for the latest evaluations — see SQLite Database.get_feedback_rows."""
+        query = """
+            SELECT
+                t.ticket_id, t.closed_at, t.group_id, t.group_name,
+                COALESCE(e.agent_name, t.agent_name) AS agent_name, t.channel,
+                e.id AS evaluation_id, e.aggregate_score, e.performance_band,
+                e.evaluator_confidence, e.flags, e.ticket_summary, e.evaluated_at,
+                m.metric_id, m.metric_name, m.rating, m.rating_label,
+                m.evidence, m.reasoning, m.improvement_note
+            FROM evaluations e
+            JOIN tickets t ON t.ticket_id = e.ticket_id
+            LEFT JOIN metric_results m ON m.evaluation_id = e.id
+            WHERE e.is_latest = 1
+        """
+        params: list = []
+        if agent_name:
+            query += " AND COALESCE(e.agent_name, t.agent_name) = ?"; params.append(agent_name)
+        if month:
+            query += " AND SUBSTR(t.closed_at, 1, 7) = ?"; params.append(month)
+        if group_id is not None:
+            query += " AND t.group_id = ?"; params.append(group_id)
+        if ticket_id is not None:
+            query += " AND t.ticket_id = ?"; params.append(ticket_id)
+        query += " ORDER BY t.closed_at, t.ticket_id, m.metric_id"
+        return self._query(query, params)
+
+    def list_agents(self, month=None) -> list[dict]:
+        """Distinct agent names (with ticket counts) among latest evaluations."""
+        query = """
+            SELECT COALESCE(e.agent_name, t.agent_name) AS agent_name, t.group_id, COUNT(*) AS n
+            FROM evaluations e
+            JOIN tickets t ON t.ticket_id = e.ticket_id
+            WHERE e.is_latest = 1 AND COALESCE(e.agent_name, t.agent_name) IS NOT NULL
+                  AND COALESCE(e.agent_name, t.agent_name) != ''
+        """
+        params: list = []
+        if month:
+            query += " AND SUBSTR(t.closed_at, 1, 7) = ?"; params.append(month)
+        query += " GROUP BY COALESCE(e.agent_name, t.agent_name), t.group_id ORDER BY agent_name"
         return self._query(query, params)
 
     def get_evaluations_in_range(self, from_date=None, to_date=None) -> list[dict]:

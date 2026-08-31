@@ -57,7 +57,11 @@ timedatectl
 .venv/bin/python scripts/migrate_sqlite_to_snowflake.py \
     --sqlite data/evaluations.db --state data/state.json
 ```
-Confirm the printed `SQLite -> Snowflake` counts match, `*_id_seq` reset, `pipeline_state cursor = set`.
+Confirm the printed `SQLite -> Snowflake` counts match, the `narrative enrichment: read N/N eval blobs`
+line shows N ≈ the eval count, `*_id_seq` reset, and `pipeline_state cursor = set`. The migration reads
+each evaluation's on-disk JSON blob to carry the feedback narrative (`agent_name`, `ticket_summary`, and
+per-metric `reasoning`/`improvement_note`/`evidence`) into Snowflake — so run it from a machine that has
+the `data/` blobs (your local machine, or the VM after `scp`-ing `data/`).
 
 ## 6. Log rotation (optional but recommended)
 ```bash
@@ -118,6 +122,37 @@ SELECT started_at, completed_at, mode, window_from, window_to,
        fetched, evaluated, published, excluded, errors, error_details
 FROM runs ORDER BY started_at DESC LIMIT 10;
 ```
+
+## Reader role + Cowork agent-feedback skill
+
+The [`skills/agent-feedback/`](skills/agent-feedback/) skill lets anyone generate the monthly
+per-agent Strengths / Areas-for-Development check-ins from the QC data. It connects to Snowflake
+**read-only** via a dedicated SELECT-only user (never the pipeline write user).
+
+One-time setup (run as `ACCOUNTADMIN`; edit the placeholders/db/warehouse first):
+```bash
+snowsql -f deploy/snowflake_reader.sql        # SELECT-only role + user for the skill
+snowsql -f deploy/seed_metric_weights.sql     # metric registry + weights (sum = 100)
+snowsql -f deploy/snowflake_views.sql         # convenience views (v_agent_month_weighted, v_low_tickets, …)
+```
+The narrative columns the skill needs (`evaluations.agent_name` / `ticket_summary`, and
+`metric_results.metric_name`/`evidence`/`reasoning`/`improvement_note`) are created automatically by
+the app and populated by the migration (step 5). If you migrated *before* this feature, backfill them
+once from the on-disk blobs:
+```bash
+.venv/bin/python scripts/backfill_eval_text.py     # backend-agnostic; fills only missing rows
+```
+
+Point Cowork at the skill: in the skill's environment set `SNOWFLAKE_READER_USER` /
+`SNOWFLAKE_READER_PASSWORD` (account/warehouse/database/schema reused from the standard `SNOWFLAKE_*`
+vars). When those are set, the app connects as the reader automatically. Verify:
+```bash
+python skills/agent-feedback/fetch_qc_data.py --list-agents --month 2026-06
+python skills/agent-feedback/fetch_qc_data.py --agent "Some Agent" --month 2026-06
+```
+Then Cowork follows [`skills/agent-feedback/SKILL.md`](skills/agent-feedback/SKILL.md) +
+`METHODOLOGY.md` to write the check-ins. Locally (SQLite backend) the same commands work without any
+reader creds — handy for testing the skill before the VM is up.
 
 ## Notes
 - **Secrets:** `.env` holds `SNOWFLAKE_PASSWORD` + API keys → `chmod 600` and restrict VM access.

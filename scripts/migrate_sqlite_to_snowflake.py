@@ -28,10 +28,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd  # noqa: E402
 from snowflake.connector.pandas_tools import write_pandas  # noqa: E402
 
+from scripts.backfill_eval_text import extract_eval_text  # noqa: E402
 from src.config import load_config  # noqa: E402
 from src.storage.snowflake_database import SnowflakeDatabase  # noqa: E402
 
 TABLES = ["tickets", "evaluations", "metric_results", "runs"]
+
+# Narrative columns that may be absent (old SQLite schema) / NULL and must be
+# carried into Snowflake from the eval JSON blobs.
+_EVAL_TEXT_COLS = ["AGENT_NAME", "TICKET_SUMMARY"]
+_METRIC_TEXT_COLS = ["METRIC_NAME", "EVIDENCE", "REASONING", "IMPROVEMENT_NOTE"]
 
 
 def _read_table(sconn: sqlite3.Connection, name: str) -> pd.DataFrame:
@@ -40,6 +46,58 @@ def _read_table(sconn: sqlite3.Connection, name: str) -> pd.DataFrame:
         df = df.drop(columns=["id"])  # let Snowflake AUTOINCREMENT assign
     df.columns = [c.upper() for c in df.columns]  # match unquoted (UPPER) Snowflake columns
     return df
+
+
+def _enrich_narrative(evals: pd.DataFrame, metrics: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fill the narrative columns on the evaluations + metric_results frames from eval JSON blobs.
+
+    Reads each evaluation's ``eval_json_path`` once, then fills ``ticket_summary`` on
+    evaluations and ``metric_name``/``evidence``/``reasoning``/``improvement_note`` on the
+    matching metric rows. Only fills where the value is missing/empty, so it is safe whether
+    or not the SQLite DB was already backfilled. Rows whose blob is missing keep empty text.
+    """
+    for col in _EVAL_TEXT_COLS:
+        if col not in evals.columns:
+            evals[col] = None
+    for col in _METRIC_TEXT_COLS:
+        if col not in metrics.columns:
+            metrics[col] = None
+
+    agent_by_id: dict[int, str] = {}
+    summary_by_id: dict[int, str] = {}
+    per_metric_by_id: dict[int, dict[str, dict]] = {}
+    read = 0
+    for _, row in evals.iterrows():
+        eid = row["ID"]
+        agent, summary, per_metric = extract_eval_text(row.get("EVAL_JSON_PATH"))
+        if agent is None and summary is None and not per_metric:
+            continue
+        read += 1
+        agent_by_id[eid] = agent or ""
+        summary_by_id[eid] = summary or ""
+        per_metric_by_id[eid] = per_metric
+
+    def _fill_from(row, col, source):
+        cur = row[col]
+        if cur in (None, "") and row["ID"] in source:
+            return source[row["ID"]]
+        return cur
+    evals["AGENT_NAME"] = evals.apply(lambda r: _fill_from(r, "AGENT_NAME", agent_by_id), axis=1)
+    evals["TICKET_SUMMARY"] = evals.apply(lambda r: _fill_from(r, "TICKET_SUMMARY", summary_by_id), axis=1)
+
+    def _fill_metric(row, field, col):
+        cur = row[col]
+        if cur not in (None, ""):
+            return cur
+        fields = per_metric_by_id.get(row["EVALUATION_ID"], {}).get(row["METRIC_ID"])
+        return fields[field] if fields else cur
+    field_map = {"METRIC_NAME": "metric_name", "EVIDENCE": "evidence",
+                 "REASONING": "reasoning", "IMPROVEMENT_NOTE": "improvement_note"}
+    for col, field in field_map.items():
+        metrics[col] = metrics.apply(lambda r, f=field, c=col: _fill_metric(r, f, c), axis=1)
+
+    print(f"  narrative enrichment: read {read}/{len(evals)} eval blobs")
+    return evals, metrics
 
 
 def main() -> int:
@@ -59,12 +117,18 @@ def main() -> int:
     conn = db._connection()
     sconn = sqlite3.connect(args.sqlite)
 
+    # Read all source frames first, then enrich the narrative columns from the eval
+    # JSON blobs (evaluations.ticket_summary + per-metric text) before bulk-loading.
+    frames = {t: _read_table(sconn, t) for t in TABLES}
+    frames["evaluations"], frames["metric_results"] = _enrich_narrative(
+        frames["evaluations"], frames["metric_results"])
+
     src_counts, tgt_counts = {}, {}
     for t in TABLES:
         src_counts[t] = sconn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         if not args.no_truncate:
             conn.cursor().execute(f"TRUNCATE TABLE IF EXISTS {t}")
-        df = _read_table(sconn, t)
+        df = frames[t]
         if len(df):
             ok, nchunks, nrows, _ = write_pandas(conn, df, t.upper(), quote_identifiers=True)
             print(f"  {t}: loaded {nrows} rows (ok={ok})")

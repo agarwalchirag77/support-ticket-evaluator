@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
     aggregate_score         REAL,
     performance_band        TEXT,
     evaluator_confidence    TEXT,
+    agent_name              TEXT,       -- handling agent (from the evaluation; tickets.agent_name is unused)
+    ticket_summary          TEXT,       -- one-line ticket context (for feedback prose)
     frt_status              TEXT,
     frt_minutes             REAL,
     ttr_status              TEXT,
@@ -50,11 +52,15 @@ CREATE TABLE IF NOT EXISTS evaluations (
 );
 
 CREATE TABLE IF NOT EXISTS metric_results (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    evaluation_id   INTEGER NOT NULL,
-    metric_id       TEXT NOT NULL,
-    rating          TEXT,              -- stored as TEXT to handle N/A and integers
-    rating_label    TEXT,
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    evaluation_id     INTEGER NOT NULL,
+    metric_id         TEXT NOT NULL,
+    metric_name       TEXT,            -- human-readable metric name
+    rating            TEXT,            -- stored as TEXT to handle N/A and integers
+    rating_label      TEXT,
+    evidence          TEXT,            -- quote/citation backing the score
+    reasoning         TEXT,            -- why this metric scored as it did
+    improvement_note  TEXT,            -- concrete "what to improve" text
     FOREIGN KEY (evaluation_id) REFERENCES evaluations(id)
 );
 
@@ -116,9 +122,25 @@ class Database:
                 default = " DEFAULT 0" if col == "excluded" else ""
                 coltype = "INTEGER" if col == "excluded" else "TEXT"
                 conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {coltype}{default}")
+        # Idempotent migration: feedback-narrative columns on pre-existing DBs.
+        self._ensure_columns(conn, "evaluations", {"agent_name": "TEXT", "ticket_summary": "TEXT"})
+        self._ensure_columns(conn, "metric_results", {
+            "metric_name": "TEXT",
+            "evidence": "TEXT",
+            "reasoning": "TEXT",
+            "improvement_note": "TEXT",
+        })
         conn.commit()
         conn.close()
         logger.debug("Database schema initialised at %s", self.db_path)
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        """Add any missing columns to `table` (idempotent ALTER TABLE ADD COLUMN)."""
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col, coltype in columns.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
 
     # ------------------------------------------------------------------
     # Tickets
@@ -191,10 +213,10 @@ class Database:
                 """
                 INSERT INTO evaluations (
                     ticket_id, evaluated_at, prompt_version, llm_provider, llm_model,
-                    aggregate_score, performance_band, evaluator_confidence,
+                    aggregate_score, performance_band, evaluator_confidence, agent_name, ticket_summary,
                     frt_status, frt_minutes, ttr_status, ttr_minutes,
                     flags, eval_json_path, is_latest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     int(result.ticket_id),
@@ -205,6 +227,8 @@ class Database:
                     result.aggregate_score.numeric if result.aggregate_score else None,
                     result.aggregate_score.band if result.aggregate_score else None,
                     result.evaluator_confidence,
+                    result.agent_name or "",
+                    result.ticket_summary or "",
                     frt.status if frt else None,
                     frt.value_minutes if frt else None,
                     ttr.status if ttr else None,
@@ -217,11 +241,89 @@ class Database:
 
             for m in result.metrics:
                 cur.execute(
-                    "INSERT INTO metric_results (evaluation_id, metric_id, rating, rating_label) VALUES (?, ?, ?, ?)",
-                    (eval_id, m.metric_id, str(m.rating), m.rating_label),
+                    """
+                    INSERT INTO metric_results (
+                        evaluation_id, metric_id, metric_name, rating, rating_label,
+                        evidence, reasoning, improvement_note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (eval_id, m.metric_id, m.metric_name, str(m.rating), m.rating_label,
+                     m.evidence, m.reasoning, m.improvement_note),
                 )
 
         return eval_id
+
+    def get_feedback_rows(
+        self,
+        agent_name: Optional[str] = None,
+        month: Optional[str] = None,
+        group_id: Optional[int] = None,
+        ticket_id: Optional[int] = None,
+    ) -> list[sqlite3.Row]:
+        """Flat (ticket × metric) rows for the latest evaluations, for feedback.
+
+        One row per metric per ticket, carrying the ticket context, aggregate,
+        band, flags, ticket_summary, and the per-metric rating + narrative
+        (reasoning / improvement_note / evidence). Filters:
+          agent_name — exact match on the handling agent
+          month      — 'YYYY-MM' on tickets.closed_at (first 7 chars)
+          group_id   — Zendesk group id (L1 / L2)
+          ticket_id  — a single ticket (for per-ticket drill-down / Q&A)
+        The Python feedback layer aggregates these rows (weighted score, per-metric
+        averages excluding N/A, low-ticket selection).
+        """
+        conn = self._connect()
+        try:
+            query = """
+                SELECT
+                    t.ticket_id, t.closed_at, t.group_id, t.group_name,
+                    COALESCE(e.agent_name, t.agent_name) AS agent_name, t.channel,
+                    e.id AS evaluation_id, e.aggregate_score, e.performance_band,
+                    e.evaluator_confidence, e.flags, e.ticket_summary, e.evaluated_at,
+                    m.metric_id, m.metric_name, m.rating, m.rating_label,
+                    m.evidence, m.reasoning, m.improvement_note
+                FROM evaluations e
+                JOIN tickets t ON t.ticket_id = e.ticket_id
+                LEFT JOIN metric_results m ON m.evaluation_id = e.id
+                WHERE e.is_latest = 1
+            """
+            params: list = []
+            if agent_name:
+                query += " AND COALESCE(e.agent_name, t.agent_name) = ?"
+                params.append(agent_name)
+            if month:
+                query += " AND substr(t.closed_at, 1, 7) = ?"
+                params.append(month)
+            if group_id is not None:
+                query += " AND t.group_id = ?"
+                params.append(group_id)
+            if ticket_id is not None:
+                query += " AND t.ticket_id = ?"
+                params.append(ticket_id)
+            query += " ORDER BY t.closed_at, t.ticket_id, m.metric_id"
+            return conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+
+    def list_agents(self, month: Optional[str] = None) -> list[sqlite3.Row]:
+        """Distinct agent names (with ticket counts) among latest evaluations."""
+        conn = self._connect()
+        try:
+            query = """
+                SELECT COALESCE(e.agent_name, t.agent_name) AS agent_name, t.group_id, COUNT(*) AS n
+                FROM evaluations e
+                JOIN tickets t ON t.ticket_id = e.ticket_id
+                WHERE e.is_latest = 1 AND COALESCE(e.agent_name, t.agent_name) IS NOT NULL
+                      AND COALESCE(e.agent_name, t.agent_name) != ''
+            """
+            params: list = []
+            if month:
+                query += " AND substr(t.closed_at, 1, 7) = ?"
+                params.append(month)
+            query += " GROUP BY COALESCE(e.agent_name, t.agent_name), t.group_id ORDER BY 1"
+            return conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
 
     def mark_published(self, eval_id: int, published_at: str) -> None:
         with self._cursor() as cur:

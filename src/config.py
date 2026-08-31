@@ -476,14 +476,20 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     storage = StorageConfig(backend=(stg.get("backend") or "sqlite").lower())
 
     sf = raw.get("snowflake", {}) or {}
+    # Prefer read-only reader creds when present (set only in the Cowork skill env, never
+    # on the pipeline VM), so the agent-feedback skill connects SELECT-only automatically.
+    reader_user = os.environ.get("SNOWFLAKE_READER_USER")
+    reader_password = os.environ.get("SNOWFLAKE_READER_PASSWORD")
+    reader_role = os.environ.get("SNOWFLAKE_READER_ROLE")
+    use_reader = bool(reader_user and reader_password)
     snowflake = SnowflakeConfig(
         account=sf.get("account", ""),
-        user=sf.get("user", ""),
-        password=sf.get("password", ""),
+        user=reader_user if use_reader else sf.get("user", ""),
+        password=reader_password if use_reader else sf.get("password", ""),
         warehouse=sf.get("warehouse", ""),
         database=sf.get("database", ""),
         schema=sf.get("schema", ""),
-        role=sf.get("role", ""),
+        role=(reader_role or "TICKET_EVALUATOR_READER") if use_reader else sf.get("role", ""),
     )
 
     return AppConfig(
