@@ -31,7 +31,13 @@ python3 -m venv .venv
 ```
 
 ## 3. Secrets + backend + data to migrate
-From your **local** machine:
+From your **local** machine, first make sure the SQLite DB carries the feedback narrative
+(`agent_name` / `ticket_summary` / per-metric `reasoning`), so it travels **inside the DB** and
+the VM never needs the raw JSON blobs:
+```bash
+python scripts/backfill_eval_text.py     # idempotent; fills the narrative columns from local blobs
+```
+Then copy secrets + DB + cursor to the VM:
 ```bash
 scp .env                                 USER@VM:/opt/support-ticket-evaluator/.env
 scp data/evaluations.db data/state.json  USER@VM:/opt/support-ticket-evaluator/data/
@@ -57,11 +63,14 @@ timedatectl
 .venv/bin/python scripts/migrate_sqlite_to_snowflake.py \
     --sqlite data/evaluations.db --state data/state.json
 ```
-Confirm the printed `SQLite -> Snowflake` counts match, the `narrative enrichment: read N/N eval blobs`
-line shows N ≈ the eval count, `*_id_seq` reset, and `pipeline_state cursor = set`. The migration reads
-each evaluation's on-disk JSON blob to carry the feedback narrative (`agent_name`, `ticket_summary`, and
-per-metric `reasoning`/`improvement_note`/`evidence`) into Snowflake — so run it from a machine that has
-the `data/` blobs (your local machine, or the VM after `scp`-ing `data/`).
+Confirm the printed `SQLite -> Snowflake` counts match, `*_id_seq` reset, and `pipeline_state
+cursor = set`. The feedback narrative (`agent_name` / `ticket_summary` / per-metric
+`reasoning`/`improvement_note`/`evidence`) rides along **inside the `.db`** you backfilled in step 3,
+so the VM needs only the `.db`, not the JSON blobs. On the VM the `narrative enrichment` line will read
+`0` blobs — that is expected and harmless (the text is already in the copied DB; the blob read only
+fills anything still empty). *Alternative:* run this migration on your **local** machine (where the
+blobs live and `storage.backend=snowflake` in a local `.env`) — then it reads the blobs directly and
+you can skip step 3's backfill.
 
 ## 6. Log rotation (optional but recommended)
 ```bash
@@ -153,6 +162,10 @@ python skills/agent-feedback/fetch_qc_data.py --agent "Some Agent" --month 2026-
 Then Cowork follows [`skills/agent-feedback/SKILL.md`](skills/agent-feedback/SKILL.md) +
 `METHODOLOGY.md` to write the check-ins. Locally (SQLite backend) the same commands work without any
 reader creds — handy for testing the skill before the VM is up.
+
+**Handing the skill to teammates:** to let others consume this from their own local Claude app
+(read-only), share [`skills/agent-feedback/SETUP.md`](skills/agent-feedback/SETUP.md) — it has the
+admin checklist (which 6 values to distribute) and the per-person local setup + smoke test.
 
 ## Notes
 - **Secrets:** `.env` holds `SNOWFLAKE_PASSWORD` + API keys → `chmod 600` and restrict VM access.
