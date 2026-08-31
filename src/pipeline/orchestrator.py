@@ -104,10 +104,12 @@ class Orchestrator:
 
             # Stage 2: Evaluate
             logger.info("=== Stage 2: Evaluating %d tickets ===", stats.fetched)
-            results = await self._evaluator.evaluate_all(ticket_data_list, force=force)
+            results, skipped = await self._evaluator.evaluate_all(ticket_data_list, force=force)
             stats.evaluated = len(results)
-            stats.errors += stats.fetched - stats.evaluated
-            logger.info("Evaluated %d/%d tickets", stats.evaluated, stats.fetched)
+            # fetched = freshly-evaluated + already-done (skipped) + failures.
+            stats.errors += stats.fetched - stats.evaluated - skipped
+            logger.info("Evaluated %d/%d tickets (%d already done, skipped)",
+                        stats.evaluated, stats.fetched, skipped)
 
             # Stage 3: Publish
             logger.info("=== Stage 3: Publishing %d results ===", stats.evaluated)
@@ -208,9 +210,9 @@ class Orchestrator:
         stats.fetched = len(ticket_data_list)
         logger.info("Re-evaluating %d tickets (%d excluded)", stats.fetched, stats.excluded)
 
-        results = await self._evaluator.evaluate_all(ticket_data_list, force=True)
+        results, skipped = await self._evaluator.evaluate_all(ticket_data_list, force=True)
         stats.evaluated = len(results)
-        stats.errors += stats.fetched - stats.evaluated
+        stats.errors += stats.fetched - stats.evaluated - skipped
 
         published, pub_errors = await self._publisher.publish_all(results)
         stats.published = published

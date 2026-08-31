@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -53,6 +54,20 @@ class Fetcher:
             logger.info("Backfill mode: fetching from %s (unix=%d)", from_date, start_time)
         else:
             cursor = state.zendesk_cursor
+            if cursor is None:
+                # First-run fallback to initial_fetch_from. Guard: if the DB already holds
+                # evaluations, an empty cursor almost certainly means the persisted cursor was
+                # lost (e.g. pipeline_state not seeded on the VM) — proceeding would re-fetch and
+                # re-process months of completed tickets. Refuse unless explicitly overridden.
+                existing_evals = self._db.get_summary_stats().get("evals_total", 0)
+                if existing_evals and os.environ.get("ALLOW_FULL_REFETCH") != "1":
+                    raise RuntimeError(
+                        f"No Zendesk cursor found, but the DB already has {existing_evals} "
+                        f"evaluations. Refusing a full re-fetch from "
+                        f"{self._config.state.initial_fetch_from} (this would re-process everything). "
+                        f"Seed the incremental cursor (see DEPLOY.md — 'window_start') or, to force a "
+                        f"genuine full re-fetch, set ALLOW_FULL_REFETCH=1."
+                    )
             start_time = state.initial_fetch_unix if cursor is None else None
             logger.info(
                 "Fetching tickets: %s",

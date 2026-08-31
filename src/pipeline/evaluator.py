@@ -48,8 +48,14 @@ class Evaluator:
         self,
         ticket_data_list: list[dict],
         force: bool = False,
-    ) -> list[EvaluationResult]:
-        """Evaluate a list of raw ticket dicts; return successful results."""
+    ) -> tuple[list[EvaluationResult], int]:
+        """Evaluate a list of raw ticket dicts.
+
+        Returns ``(results, skipped)`` where ``skipped`` counts tickets that were
+        already evaluated with the current prompt version and intentionally not
+        re-run (they are NOT errors). ``results`` holds only freshly-evaluated (or
+        cached-and-loaded) tickets to publish.
+        """
         sem = asyncio.Semaphore(self._config.pipeline.concurrent_evaluations)
         tasks = [
             self._evaluate_one(ticket_data, sem, force)
@@ -57,32 +63,47 @@ class Evaluator:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        successes = []
+        successes: list[EvaluationResult] = []
+        skipped = 0
         for ticket_data, result in zip(ticket_data_list, results):
             tid = ticket_data.get("Ticket_Metadata", {}).get("ticket", {}).get("id", "?")
             if isinstance(result, Exception):
                 logger.error("Evaluation failed for ticket %s: %s", tid, result)
+            elif result is None:
+                skipped += 1  # already evaluated — intentionally not re-run
             else:
                 successes.append(result)
-        return successes
+        if skipped:
+            logger.info("Skipped %d ticket(s) already evaluated with the current prompt version", skipped)
+        return successes, skipped
 
     async def _evaluate_one(
         self,
         ticket_data: dict,
         sem: asyncio.Semaphore,
         force: bool,
-    ) -> EvaluationResult:
+    ) -> Optional[EvaluationResult]:
         ticket_id = ticket_data["Ticket_Metadata"]["ticket"]["id"]
         prompt_version = self._config.evaluation.prompt_version
 
         async with sem:
-            # Skip if already evaluated with this prompt version
+            # Skip if already evaluated with this prompt version. Skipping is keyed on the
+            # DB record alone — NOT on the presence of the local eval JSON blob. On the
+            # Snowflake VM the blobs are not on disk, so requiring them here would (and did)
+            # fall through and re-run the LLM on every already-evaluated ticket. Return the
+            # cached result when the blob IS available (so it can be re-published if needed),
+            # else return None to signal "already done — skip, don't re-evaluate".
             if not force and self._config.evaluation.skip_if_evaluated:
                 if self._db.has_evaluation(ticket_id, prompt_version):
-                    logger.debug("Ticket %s already evaluated (v%s) — skipping", ticket_id, prompt_version)
                     existing = self._file_store.load_eval(ticket_id, prompt_version)
                     if existing:
+                        logger.debug("Ticket %s already evaluated (v%s) — skipping (cached)", ticket_id, prompt_version)
                         return existing
+                    logger.debug(
+                        "Ticket %s already evaluated (v%s) in DB, no local blob — skipping re-eval",
+                        ticket_id, prompt_version,
+                    )
+                    return None
 
             logger.info("Evaluating ticket %s with %s", ticket_id, self._config.llm.provider)
 
