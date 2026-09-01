@@ -56,22 +56,8 @@ and the 6 values above from your admin.
    cd support-ticket-evaluator
    ```
 
-2. **Install the few packages the fetch needs** (light footprint — you don't need the full
-   pipeline deps):
-   ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install snowflake-connector-python pyyaml python-dotenv pydantic
-   # (or: .venv/bin/pip install -r requirements.txt  — everything, if you prefer)
-   ```
-
-3. **Point the app at Snowflake, read-only.** Set the backend to snowflake:
-   ```bash
-   sed -i '' 's/^\(\s*backend:\).*/\1 snowflake/' config/config.yaml   # macOS
-   # Linux: sed -i 's/^\(\s*backend:\).*/\1 snowflake/' config/config.yaml
-   grep -A1 '^storage:' config/config.yaml    # verify -> backend: snowflake
-   ```
-   Create a `.env` in the repo root with the values from your admin (reader creds only — you do
-   **not** need the pipeline write user or any API keys):
+2. **Add your reader creds** to a repo-root `.env` (reader creds only — you do **not** need the
+   pipeline write user or any API keys):
    ```bash
    cat > .env <<'EOF'
    SNOWFLAKE_ACCOUNT=ab12345.us-east-1
@@ -83,14 +69,32 @@ and the 6 values above from your admin.
    EOF
    chmod 600 .env
    ```
-   When the reader vars are present the app connects as the read-only user automatically — even
-   though `config.yaml`'s `snowflake.user` points at the pipeline user, the reader creds win.
 
-4. **Smoke-test the connection** (should print a roster, not an error):
+3. **Run the one-command setup** — it creates the venv, installs the few fetch deps, points the
+   app at Snowflake, checks your creds, and runs a read-only smoke test:
    ```bash
-   .venv/bin/python skills/agent-feedback/fetch_qc_data.py --list-agents --month 2026-06
+   bash skills/agent-feedback/setup.sh
    ```
-   If you see agent names + counts, you're connected read-only and ready. A permissions error on
+   A clean run ends with `self-check PASSED` and an example question. If it reports missing keys,
+   add them to `.env` and re-run. (When the reader vars are present the app connects as the
+   read-only user automatically — the reader creds win over `config.yaml`'s pipeline user.)
+
+   <details><summary>Manual steps (if you'd rather not use the script)</summary>
+
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/pip install snowflake-connector-python pyyaml python-dotenv pydantic
+   sed -i '' 's/^\(\s*backend:\).*/\1 snowflake/' config/config.yaml   # macOS (Linux: drop the '')
+   .venv/bin/python skills/agent-feedback/fetch_qc_data.py --self-check
+   ```
+   </details>
+
+4. **Verify** (the smoke test already did this; run it any time to re-check):
+   ```bash
+   .venv/bin/python skills/agent-feedback/fetch_qc_data.py --self-check
+   ```
+   You should see `connection: OK`, `narrative columns: OK`, a roster, and `self-check PASSED`. A
+   permissions error on
    anything other than SELECT is expected — the user is SELECT-only by design.
 
 5. **Use it from your Claude app.** Open this repo as your project/workspace in Claude Code or
@@ -98,6 +102,10 @@ and the 6 values above from your admin.
    e.g.:
    - "Generate the monthly QC feedback for **<agent>** for June 2026."
    - "Review **L1** for June 2026 and give me a check-in per agent."
+   - "Give me the **L2 leaderboard** for June 2026."
+   - "**Compare <agent> to the team** for June — where are they above/below peers?"
+   - "**Who improved or slipped** in L1 this month?"
+   - "Review **<agent> for Q2** (April–June)."
    - "**Why was ticket 72247 rated low?**"
    - "What can **<agent>** improve on ticket 71921?"
    - "Why did **<agent>** score low on RCA this month?"

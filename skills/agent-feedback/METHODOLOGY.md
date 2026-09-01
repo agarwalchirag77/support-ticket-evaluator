@@ -108,6 +108,25 @@ When answering "why was ticket X rated low" / "what can be improved on ticket X"
 - **One ticket is one data point.** A single low ticket isn't a pattern — frame it as this ticket's
   handling, and only call something a trend if the agent-month bundle backs it up.
 
+## Team-level reads (leaderboard, compare, changes, ranges)
+
+When ranking or comparing across people (`--leaderboard`, `--compare`, `--changes`):
+
+- **Always compare within a group.** L1 (chat) and L2 (escalation) tickets differ in difficulty and
+  score differently — rank L1 against L1 and L2 against L2 (`--group`). A cross-group leaderboard is
+  misleading. `--compare` compares an agent to *their own group's* average.
+- **Respect ticket volume.** A 3.9 over 4 tickets is thinner evidence than a 3.6 over 40. The tools
+  flag `insufficient_data` (< 3 tickets) and always return `n_tickets` — say so rather than ranking a
+  1–2 ticket month as if it were settled. Sort confident entries above thin ones.
+- **Deltas are directional, not verdicts.** `--changes` `weighted_delta` and `--compare` per-metric
+  gaps point to *where to look*, not a final judgment — one weak metric or one down month is a
+  coaching conversation, not a rating. Pair a drop with the specific low tickets behind it.
+- **Ranges aggregate, then break down.** A quarter view gives a `window` score (all tickets in the
+  range, so busier months weigh more) plus `by_month` — read both: the window for the overall level,
+  `by_month` for the trajectory within it.
+- Everything uses the **same weights and N/A rule** as the single-agent check-in, so a leaderboard
+  score equals that agent's own bundle score — they never disagree.
+
 ## Name matching
 
 Agent names are matched **exactly**. Some people appear under variant spellings (e.g.

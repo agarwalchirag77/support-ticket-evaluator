@@ -2,14 +2,16 @@
 name: agent-feedback
 description: >-
   Analyse Hevo support QC data and answer questions about agent and ticket
-  quality — generate monthly Strengths / Areas-for-Development check-ins, and
-  answer ad-hoc questions like "why was ticket 72247 rated low", "what can
-  <agent> improve on ticket X", "why did <agent> score low on RCA this month",
-  "which of <agent>'s tickets breached SLA", or "show <agent>'s worst tickets".
-  Backed by weighted QC scores and per-metric reasoning from the ticket-evaluator
-  QC database. Use for "monthly agent feedback", "QC check-in", "performance
-  feedback for <agent>", "why is this ticket rated low", "what to improve on
-  ticket <id>", or a whole-group (L1 / L2) review.
+  quality — generate monthly Strengths / Areas-for-Development check-ins, rank a
+  whole team, compare an agent to their group, track month-over-month change, and
+  answer ad-hoc questions like "why was ticket 72247 rated low", "what can <agent>
+  improve on ticket X", "why did <agent> score low on RCA this month", "which of
+  <agent>'s tickets breached SLA", or "show <agent>'s worst tickets". Backed by
+  weighted QC scores and per-metric reasoning from the ticket-evaluator QC
+  database. Use for "monthly agent feedback", "QC check-in", "performance feedback
+  for <agent>", "team/L1/L2 leaderboard", "who improved or slipped this month",
+  "compare <agent> to the team", "quarter review", "why is this ticket rated low",
+  or "what to improve on ticket <id>".
 ---
 
 # Agent Feedback & QC Analysis
@@ -35,7 +37,12 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
 | "Why did <agent> score low on RCA?" / "what's <agent>'s weak spot?" | **Agent mode** — fetch the bundle, read `weakest` + the `low_tickets` reasoning for that metric |
 | "Which of <agent>'s tickets breached SLA / frustrated the customer?" | **Agent mode** — read `flags_pct` and the per-ticket `flags` in `low_tickets` |
 | "Show <agent>'s worst / best tickets this month" | **Agent mode** — `low_tickets` / `best_tickets` |
+| "Rank all of L1 / L2 for June" / "team leaderboard" | **Leaderboard** — `--leaderboard --month [--group]` |
+| "Compare <agent> to the team" / "are they above or below peers?" | **Compare** — `--compare --agent --month` |
+| "Who improved / slipped this month?" | **Changes** — `--changes --month [--group]` |
+| "Review <agent> for Q2" / "last 3 months" | **Range** — `--from-month/--to-month` or `--months N` |
 | "Who's in L2?" / "how many tickets did <agent> handle?" | `--list-agents --month` |
+| "Is my setup / connection working?" | `--self-check` |
 
 ## Inputs you need
 
@@ -67,6 +74,22 @@ python skills/agent-feedback/fetch_qc_data.py --agent all --month 2026-06 --grou
 
 # Single-ticket drill-down (for "why rated low" / "what to improve on ticket X").
 python skills/agent-feedback/fetch_qc_data.py --ticket 72247
+
+# Team leaderboard for a month (rank a group by weighted score).
+python skills/agent-feedback/fetch_qc_data.py --leaderboard --month 2026-06 --group L2
+
+# Agent vs their group (per-metric above/below peers).
+python skills/agent-feedback/fetch_qc_data.py --compare --agent "Sthitapragyan Rout" --month 2026-06
+
+# Who improved / slipped vs the prior month.
+python skills/agent-feedback/fetch_qc_data.py --changes --month 2026-06 --group L1
+
+# Quarter / multi-month range (window aggregate + per-month breakdown).
+python skills/agent-feedback/fetch_qc_data.py --agent "Sthitapragyan Rout" --from-month 2026-04 --to-month 2026-06
+python skills/agent-feedback/fetch_qc_data.py --agent all --months 3 --month 2026-06 --group L1
+
+# Verify the connection + narrative data (used by setup.sh).
+python skills/agent-feedback/fetch_qc_data.py --self-check
 ```
 
 **Agent bundle** fields: `n_tickets`, `weighted_score`, `per_metric[]` (avg/rated/na/low per
@@ -77,6 +100,16 @@ metric), `weakest`, `strongest`, `flags_pct`, `trend[]`, `low_tickets[]` (each w
 `metrics[]` (all 19 — `weight`, `scored`, `rating`, `reasoning`, `evidence`, `improvement_note`),
 plus ready-sorted `lowlights` (scored metrics ≤2, worst first), `strengths` (scored metrics =4),
 and `improvements` (scored metrics <4 with a concrete note).
+
+**Team modes** (all JSON, ranked so you can render a table directly):
+- `--leaderboard` → `leaderboard[]`: per agent `weighted_score`, `n_tickets`, `weakest`/`strongest`,
+  `band_mix`, `insufficient_data` (< 3 tickets). Confident entries ranked first.
+- `--compare` → `agent_weighted` vs `team_weighted` + `weighted_delta`, and `per_metric[]` with
+  `agent_avg`, `team_avg`, `delta`, `above_team` (weakest-vs-team first).
+- `--changes` → `changes[]`: per agent `label` (improved / slipped / steady / new / insufficient_data),
+  `weighted_delta`, this/prev month scores, and `top_movers[]` (biggest per-metric shifts).
+- **Range** (`--from-month/--to-month`, or `--months N` with `--month`): agent output gains `window`
+  (a full bundle aggregated over the range) + `by_month[]`. Works with `--leaderboard` and `--agent all`.
 
 ## Steps — check-in mode
 
