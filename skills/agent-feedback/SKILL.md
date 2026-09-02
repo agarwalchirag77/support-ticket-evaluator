@@ -51,45 +51,49 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
 
 ## Prerequisites
 
-- The fetch script reads the QC DB through the app's config. On the remote it uses the
-  **read-only** Snowflake user — set these in the environment (never write creds):
-  `SNOWFLAKE_READER_USER`, `SNOWFLAKE_READER_PASSWORD` (account/warehouse/database/schema
-  reused from the standard `SNOWFLAKE_*` vars). See DEPLOY.md → "Reader role + skill".
-- Run from the repo root so `config/config.yaml` and `src/` resolve. Python needs
-  `snowflake-connector-python` (already in `requirements.txt`).
+- **Self-contained** — this folder does not need the app repo. `fetch_qc_data.py` reads the QC
+  data through its sibling `qc_reader.py`, which connects **read-only** to Snowflake using the
+  reader creds in a `.env` in this folder: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_WAREHOUSE`,
+  `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_READER_USER`, `SNOWFLAKE_READER_PASSWORD`.
+- One-time install: `bash setup.sh` (makes a `.venv` here + installs `snowflake-connector-python`
+  and `python-dotenv`, then runs a smoke test). See `SETUP.md`.
+- Run the script by its path from anywhere — it finds `.env` and `qc_reader` next to itself and
+  auto-uses the `.venv` setup.sh created. (For local dev in a repo checkout with no creds, it falls
+  back to `data/evaluations.db`, or pass `--sqlite <path>`.)
 
 ## The fetch script
 
-`fetch_qc_data.py` returns JSON evidence only (no prose) — you write the answer from it.
+`fetch_qc_data.py` returns JSON evidence only (no prose) — you write the answer from it. Run it
+from this skill folder (`cd` here first, or call it by its full path); it self-selects its `.venv`.
 
 ```bash
 # Roster for a month (exact names + counts + group). Run first for any agent question.
-python skills/agent-feedback/fetch_qc_data.py --list-agents --month 2026-06
+python fetch_qc_data.py --list-agents --month 2026-06
 
 # Agent bundle for a month (add --group L1|L2 to scope, --trend N for prior months).
-python skills/agent-feedback/fetch_qc_data.py --agent "Sthitapragyan Rout" --month 2026-06
+python fetch_qc_data.py --agent "Sthitapragyan Rout" --month 2026-06
 
 # Whole group at once.
-python skills/agent-feedback/fetch_qc_data.py --agent all --month 2026-06 --group L1
+python fetch_qc_data.py --agent all --month 2026-06 --group L1
 
 # Single-ticket drill-down (for "why rated low" / "what to improve on ticket X").
-python skills/agent-feedback/fetch_qc_data.py --ticket 72247
+python fetch_qc_data.py --ticket 72247
 
 # Team leaderboard for a month (rank a group by weighted score).
-python skills/agent-feedback/fetch_qc_data.py --leaderboard --month 2026-06 --group L2
+python fetch_qc_data.py --leaderboard --month 2026-06 --group L2
 
 # Agent vs their group (per-metric above/below peers).
-python skills/agent-feedback/fetch_qc_data.py --compare --agent "Sthitapragyan Rout" --month 2026-06
+python fetch_qc_data.py --compare --agent "Sthitapragyan Rout" --month 2026-06
 
 # Who improved / slipped vs the prior month.
-python skills/agent-feedback/fetch_qc_data.py --changes --month 2026-06 --group L1
+python fetch_qc_data.py --changes --month 2026-06 --group L1
 
 # Quarter / multi-month range (window aggregate + per-month breakdown).
-python skills/agent-feedback/fetch_qc_data.py --agent "Sthitapragyan Rout" --from-month 2026-04 --to-month 2026-06
-python skills/agent-feedback/fetch_qc_data.py --agent all --months 3 --month 2026-06 --group L1
+python fetch_qc_data.py --agent "Sthitapragyan Rout" --from-month 2026-04 --to-month 2026-06
+python fetch_qc_data.py --agent all --months 3 --month 2026-06 --group L1
 
 # Verify the connection + narrative data (used by setup.sh).
-python skills/agent-feedback/fetch_qc_data.py --self-check
+python fetch_qc_data.py --self-check
 ```
 
 **Agent bundle** fields: `n_tickets`, `weighted_score`, `per_metric[]` (avg/rated/na/low per

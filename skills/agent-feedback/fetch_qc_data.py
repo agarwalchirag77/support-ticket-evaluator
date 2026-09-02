@@ -23,14 +23,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# If setup.sh created a venv next to this script, re-exec under it so a plain
+# `python3 fetch_qc_data.py` transparently has snowflake-connector-python / dotenv.
+_VENV_PY = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+if _VENV_PY.exists() and Path(sys.executable).resolve() != _VENV_PY.resolve():
+    os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
 
-from src.config import load_config  # noqa: E402
-from src.storage.factory import make_database  # noqa: E402
+# Self-contained: no dependency on the app repo (src/). The sibling qc_reader
+# talks to Snowflake (read-only) or a local SQLite DB, chosen from the environment.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qc_reader import make_reader  # noqa: E402
 
 # --- Weighting: 12 metrics summing to 100. Metrics not listed carry weight 0 ---
 # (they are recorded but excluded from the weighted score — QC scores written
@@ -560,29 +567,19 @@ def changes_report(db, month, group_id) -> list:
     return entries
 
 
-def _mask(s: str) -> str:
-    s = s or ""
-    return s if len(s) <= 4 else f"{s[:3]}…{s[-2:]}"
-
-
-def self_check(cfg, db) -> int:
+def self_check(reader) -> int:
     """Verify connection + that the feedback narrative is populated. Returns exit code."""
-    backend = (cfg.storage.backend or "sqlite").lower()
-    print(f"backend: {backend}")
-    if backend == "snowflake":
-        sf = cfg.snowflake
-        print(f"snowflake: account={_mask(sf.account)} user={_mask(sf.user)} "
-              f"db={sf.database} schema={sf.schema} role={sf.role}")
+    print(reader.describe())
 
     try:
-        stats = db.get_summary_stats()
+        stats = reader.get_summary_stats()
     except Exception as exc:  # noqa: BLE001
         print(f"FAIL: could not query the QC database — {type(exc).__name__}: {exc}")
         return 1
     print(f"connection: OK  (tickets={stats.get('tickets_total')}, "
           f"evaluations_latest={stats.get('evals_total')}, unpublished={stats.get('unpublished')})")
 
-    agents = [dict(a) if not isinstance(a, dict) else a for a in db.list_agents(month=None)]
+    agents = [dict(a) if not isinstance(a, dict) else a for a in reader.list_agents(month=None)]
     if not agents:
         print("WARN: no agents found — the DB has no evaluations yet.")
         return 0
@@ -590,7 +587,7 @@ def self_check(cfg, db) -> int:
 
     # Narrative check: sample the busiest agent's rows for populated summary/reasoning.
     top = agents[0]["agent_name"]
-    rows = db.get_feedback_rows(agent_name=top, month=None)
+    rows = reader.get_feedback_rows(agent_name=top, month=None)
     have_summary = any(_rowget(r, "ticket_summary") for r in rows)
     have_reason = any(_rowget(r, "reasoning") for r in rows)
     if have_summary and have_reason:
@@ -647,16 +644,15 @@ def main() -> int:
                     help="Month-over-month: per-agent weighted delta vs the prior month (improved/slipped).")
     ap.add_argument("--self-check", dest="self_check", action="store_true",
                     help="Verify DB connection + that the feedback narrative is populated, then exit.")
-    ap.add_argument("--config", default="config/config.yaml")
+    ap.add_argument("--sqlite", help="Path to a local SQLite QC DB (dev override; default uses env / repo).")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
-    db = make_database(cfg)
+    db = make_reader(args.sqlite)
     group_id = GROUP_IDS.get(args.group) if args.group else None
 
     # --- self-check (no month needed) ---
     if args.self_check:
-        return self_check(cfg, db)
+        return self_check(db)
 
     # --- single ticket drill-down ---
     if args.ticket is not None:

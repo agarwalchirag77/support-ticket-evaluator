@@ -39,25 +39,28 @@ You need the Snowflake data loaded and the read-only user created. If you follow
    | `SNOWFLAKE_READER_USER` | `TICKET_EVALUATOR_READER_USER` | SELECT-only |
    | `SNOWFLAKE_READER_PASSWORD` | *(secret)* | share securely |
 
-4. Point them at this file and confirm they have **read access to the git repo** (the skill
-   needs the repo's `src/` + `config/` to run — see why in the consumer steps).
+4. **Share the skill folder** — the whole `agent-feedback/` directory (zip it, drop it in shared
+   storage, or point them at a repo checkout). It is **self-contained**: teammates do **not** need
+   the app repo, `src/`, or `config/`. Share this `SETUP.md` with it.
 
 ---
 
-## B. Consumer — set up on your local machine (~5 min)
+## B. Consumer — set up on your local machine (~3 min)
 
 **Prerequisites:** the Claude app you already use (Claude Code CLI, or Cowork), Python 3.11+,
-and the 6 values above from your admin.
+and the 6 values above from your admin. **No repo clone needed.**
 
-1. **Get the repo** (the skill imports the project's `src/` and reads `config/config.yaml`, so
-   you run it from inside a clone — you don't run the pipeline, only the read-only fetch):
+1. **Install the skill folder** into your personal skills directory so any Claude session finds it:
    ```bash
-   git clone https://github.com/agarwalchirag77/support-ticket-evaluator.git
-   cd support-ticket-evaluator
+   mkdir -p ~/.claude/skills
+   cp -R /path/to/agent-feedback ~/.claude/skills/agent-feedback   # the folder your admin shared
+   cd ~/.claude/skills/agent-feedback
    ```
+   (If you already have the app repo, the folder is `skills/agent-feedback/` — just `cd` into it;
+   you can skip the copy.)
 
-2. **Add your reader creds** to a repo-root `.env` (reader creds only — you do **not** need the
-   pipeline write user or any API keys):
+2. **Add your reader creds** to a `.env` **inside this folder** (reader creds only — no pipeline
+   user, no API keys):
    ```bash
    cat > .env <<'EOF'
    SNOWFLAKE_ACCOUNT=ab12345.us-east-1
@@ -70,35 +73,33 @@ and the 6 values above from your admin.
    chmod 600 .env
    ```
 
-3. **Run the one-command setup** — it creates the venv, installs the few fetch deps, points the
-   app at Snowflake, checks your creds, and runs a read-only smoke test:
+3. **Run the one-command setup** (from inside the folder) — it makes a local `.venv`, installs the
+   two deps, checks your creds, and runs a read-only smoke test:
    ```bash
-   bash skills/agent-feedback/setup.sh
+   bash setup.sh
    ```
-   A clean run ends with `self-check PASSED` and an example question. If it reports missing keys,
-   add them to `.env` and re-run. (When the reader vars are present the app connects as the
-   read-only user automatically — the reader creds win over `config.yaml`'s pipeline user.)
+   A clean run ends with `self-check PASSED` and example questions. If it reports missing keys, add
+   them to `.env` and re-run.
 
    <details><summary>Manual steps (if you'd rather not use the script)</summary>
 
    ```bash
    python3 -m venv .venv
-   .venv/bin/pip install snowflake-connector-python pyyaml python-dotenv pydantic
-   sed -i '' 's/^\(\s*backend:\).*/\1 snowflake/' config/config.yaml   # macOS (Linux: drop the '')
-   .venv/bin/python skills/agent-feedback/fetch_qc_data.py --self-check
+   .venv/bin/pip install snowflake-connector-python python-dotenv
+   .venv/bin/python fetch_qc_data.py --self-check
    ```
    </details>
 
-4. **Verify** (the smoke test already did this; run it any time to re-check):
+4. **Verify** (the smoke test already did this; run it any time):
    ```bash
-   .venv/bin/python skills/agent-feedback/fetch_qc_data.py --self-check
+   python fetch_qc_data.py --self-check
    ```
-   You should see `connection: OK`, `narrative columns: OK`, a roster, and `self-check PASSED`. A
+   You should see `backend: snowflake …`, `connection: OK`, `narrative columns: OK`, a roster, and
+   `self-check PASSED`. (The script auto-uses the `.venv` from step 3, so plain `python` is fine.) A
    permissions error on
    anything other than SELECT is expected — the user is SELECT-only by design.
 
-5. **Use it from your Claude app.** Open this repo as your project/workspace in Claude Code or
-   Cowork. The skill is auto-discovered (it lives in `skills/agent-feedback/`). Then just ask,
+5. **Use it from your Claude app.** The skill is auto-discovered from `~/.claude/skills/`. Just ask,
    e.g.:
    - "Generate the monthly QC feedback for **<agent>** for June 2026."
    - "Review **L1** for June 2026 and give me a check-in per agent."
@@ -128,5 +129,6 @@ and the 6 values above from your admin.
   always let `--list-agents` confirm the exact string first.
 - **What QC measures.** Written ticket handling only (replies, notes, resolution, status) — not
   live/verbal work. Keep that framing when sharing feedback.
-- **Updating the skill.** The skill travels with the repo. `git pull` to pick up improvements to
-  `SKILL.md` / `METHODOLOGY.md` / `fetch_qc_data.py`.
+- **Updating the skill.** Re-copy the `agent-feedback/` folder your admin shares (your `.env` and
+  `.venv` stay — they're git-ignored and not part of the shared folder). Re-run `bash setup.sh` if
+  the deps changed.

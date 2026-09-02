@@ -19,10 +19,9 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling modules
 
-from src.config import load_config  # noqa: E402
-from src.storage.factory import make_database  # noqa: E402
+from qc_reader import make_reader  # noqa: E402
 import fetch_qc_data as fq  # noqa: E402  (same dir)
 
 AGENT = "Sthitapragyan Rout"
@@ -40,10 +39,10 @@ def check(cond: bool, label: str, detail: str = "") -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config/config.yaml")
+    ap.add_argument("--sqlite", help="Path to a local SQLite QC DB (default: env / repo data/evaluations.db).")
     args = ap.parse_args()
 
-    db = make_database(load_config(args.config))
+    db = make_reader(args.sqlite)
     print(f"Self-test against {AGENT} / {MONTH} (ticket #{TICKET})\n")
 
     # --- Agent-month bundle ---
