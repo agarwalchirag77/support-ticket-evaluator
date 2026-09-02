@@ -12,6 +12,10 @@
 --   * agent-month weighted = AVG of the per-ticket weighted scores (each ticket equal).
 --   * "low" rating = 2 or below.
 
+-- Target the QC schema explicitly (edit if your database/schema differ).
+USE DATABASE SUPPORT_ANALYTICS;
+USE SCHEMA SUPPORT_ANALYTICS.ZENDESK_AUDIT;
+
 -- 1. Latest evaluations, one row per ticket, with agent + close-month + group label.
 CREATE OR REPLACE VIEW v_eval_latest AS
 SELECT

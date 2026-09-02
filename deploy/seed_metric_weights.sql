@@ -7,6 +7,10 @@
 --   snowsql -f deploy/seed_metric_weights.sql
 -- Safe to re-run (CREATE OR REPLACE + full re-seed).
 
+-- Target the QC schema explicitly (edit if your database/schema differ).
+USE DATABASE SUPPORT_ANALYTICS;
+USE SCHEMA SUPPORT_ANALYTICS.ZENDESK_AUDIT;
+
 CREATE TABLE IF NOT EXISTS metric_weights (
     metric_id   VARCHAR PRIMARY KEY,
     metric_name VARCHAR,
