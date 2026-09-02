@@ -3,7 +3,7 @@
 How to hand the QC agent-feedback skill to a teammate so they can run it from their **own
 local Claude app** (Claude Code / Cowork). The skill reads the shared QC data from Snowflake
 **read-only** — the consumer can generate monthly check-ins and ask ad-hoc questions
-("why was ticket X rated low", "what can <agent> improve"), but can never write, publish, or
+("why was ticket X rated low", "what can {agent} improve"), but can never write, publish, or
 change anything.
 
 There are two roles below: the **admin** (one-time, has Snowflake access) and each
@@ -19,7 +19,7 @@ You need the Snowflake data loaded and the read-only user created. If you follow
 1. **Load the QC data into Snowflake** — DEPLOY.md steps 3 + 5 (backfill locally, migrate).
 2. **Create the read-only role/user + weights + views** (as `ACCOUNTADMIN`):
    ```bash
-   snowsql -f deploy/snowflake_reader.sql       # SELECT-only role + user (edit <READER_PASSWORD>)
+   snowsql -f deploy/snowflake_reader.sql       # SELECT-only role + user (edit {READER_PASSWORD})
    snowsql -f deploy/seed_metric_weights.sql     # metric registry + weights (sum = 100)
    snowsql -f deploy/snowflake_views.sql         # convenience views
    ```
@@ -81,14 +81,12 @@ and the 6 values above from your admin. **No repo clone needed.**
    A clean run ends with `self-check PASSED` and example questions. If it reports missing keys, add
    them to `.env` and re-run.
 
-   <details><summary>Manual steps (if you'd rather not use the script)</summary>
-
+   **Manual steps** (if you'd rather not use the script):
    ```bash
    python3 -m venv .venv
    .venv/bin/pip install snowflake-connector-python python-dotenv
    .venv/bin/python fetch_qc_data.py --self-check
    ```
-   </details>
 
 4. **Verify** (the smoke test already did this; run it any time):
    ```bash
@@ -101,15 +99,15 @@ and the 6 values above from your admin. **No repo clone needed.**
 
 5. **Use it from your Claude app.** The skill is auto-discovered from `~/.claude/skills/`. Just ask,
    e.g.:
-   - "Generate the monthly QC feedback for **<agent>** for June 2026."
+   - "Generate the monthly QC feedback for **{agent}** for June 2026."
    - "Review **L1** for June 2026 and give me a check-in per agent."
    - "Give me the **L2 leaderboard** for June 2026."
-   - "**Compare <agent> to the team** for June — where are they above/below peers?"
+   - "**Compare {agent} to the team** for June — where are they above/below peers?"
    - "**Who improved or slipped** in L1 this month?"
-   - "Review **<agent> for Q2** (April–June)."
+   - "Review **{agent} for Q2** (April–June)."
    - "**Why was ticket 72247 rated low?**"
-   - "What can **<agent>** improve on ticket 71921?"
-   - "Why did **<agent>** score low on RCA this month?"
+   - "What can **{agent}** improve on ticket 71921?"
+   - "Why did **{agent}** score low on RCA this month?"
 
    Claude runs `fetch_qc_data.py` for you and writes the answer per
    [`SKILL.md`](SKILL.md) + [`METHODOLOGY.md`](METHODOLOGY.md). If your app can't auto-run the

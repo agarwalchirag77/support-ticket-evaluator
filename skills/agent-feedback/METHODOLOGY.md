@@ -130,6 +130,6 @@ When ranking or comparing across people (`--leaderboard`, `--compare`, `--change
 ## Name matching
 
 Agent names are matched **exactly**. Some people appear under variant spellings (e.g.
-"Jashmitha" vs "Jashmitha CG", two different "Muskan"s) and some as `Agent ID <n>` when
+"Jashmitha" vs "Jashmitha CG", two different "Muskan"s) and some as `Agent ID {n}` when
 Zendesk lacked a name. Run `--list-agents --month YYYY-MM` first and confirm the exact
 string before generating, so you don't split or merge people by accident.

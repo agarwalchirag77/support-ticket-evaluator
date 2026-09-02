@@ -4,14 +4,14 @@ description: >-
   Analyse Hevo support QC data and answer questions about agent and ticket
   quality — generate monthly Strengths / Areas-for-Development check-ins, rank a
   whole team, compare an agent to their group, track month-over-month change, and
-  answer ad-hoc questions like "why was ticket 72247 rated low", "what can <agent>
-  improve on ticket X", "why did <agent> score low on RCA this month", "which of
-  <agent>'s tickets breached SLA", or "show <agent>'s worst tickets". Backed by
+  answer ad-hoc questions like "why was ticket 72247 rated low", "what can {agent}
+  improve on ticket X", "why did {agent} score low on RCA this month", "which of
+  {agent}'s tickets breached SLA", or "show {agent}'s worst tickets". Backed by
   weighted QC scores and per-metric reasoning from the ticket-evaluator QC
   database. Use for "monthly agent feedback", "QC check-in", "performance feedback
-  for <agent>", "team/L1/L2 leaderboard", "who improved or slipped this month",
-  "compare <agent> to the team", "quarter review", "why is this ticket rated low",
-  or "what to improve on ticket <id>".
+  for {agent}", "team/L1/L2 leaderboard", "who improved or slipped this month",
+  "compare {agent} to the team", "quarter review", "why is this ticket rated low",
+  or "what to improve on ticket {id}".
 ---
 
 # Agent Feedback & QC Analysis
@@ -32,16 +32,16 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
 
 | The user asks… | Do this |
 |----------------|---------|
-| "Write monthly feedback for <agent>" / "review L1 for June" | **Check-in mode** — fetch the agent bundle(s), write per METHODOLOGY.md |
-| "Why was ticket 72247 rated low?" / "what can be improved on ticket X?" | **Ticket mode** — `--ticket <id>`, explain from `lowlights` + `improvements` |
-| "Why did <agent> score low on RCA?" / "what's <agent>'s weak spot?" | **Agent mode** — fetch the bundle, read `weakest` + the `low_tickets` reasoning for that metric |
-| "Which of <agent>'s tickets breached SLA / frustrated the customer?" | **Agent mode** — read `flags_pct` and the per-ticket `flags` in `low_tickets` |
-| "Show <agent>'s worst / best tickets this month" | **Agent mode** — `low_tickets` / `best_tickets` |
+| "Write monthly feedback for {agent}" / "review L1 for June" | **Check-in mode** — fetch the agent bundle(s), write per METHODOLOGY.md |
+| "Why was ticket 72247 rated low?" / "what can be improved on ticket X?" | **Ticket mode** — `--ticket {id}`, explain from `lowlights` + `improvements` |
+| "Why did {agent} score low on RCA?" / "what's {agent}'s weak spot?" | **Agent mode** — fetch the bundle, read `weakest` + the `low_tickets` reasoning for that metric |
+| "Which of {agent}'s tickets breached SLA / frustrated the customer?" | **Agent mode** — read `flags_pct` and the per-ticket `flags` in `low_tickets` |
+| "Show {agent}'s worst / best tickets this month" | **Agent mode** — `low_tickets` / `best_tickets` |
 | "Rank all of L1 / L2 for June" / "team leaderboard" | **Leaderboard** — `--leaderboard --month [--group]` |
-| "Compare <agent> to the team" / "are they above or below peers?" | **Compare** — `--compare --agent --month` |
+| "Compare {agent} to the team" / "are they above or below peers?" | **Compare** — `--compare --agent --month` |
 | "Who improved / slipped this month?" | **Changes** — `--changes --month [--group]` |
-| "Review <agent> for Q2" / "last 3 months" | **Range** — `--from-month/--to-month` or `--months N` |
-| "Who's in L2?" / "how many tickets did <agent> handle?" | `--list-agents --month` |
+| "Review {agent} for Q2" / "last 3 months" | **Range** — `--from-month/--to-month` or `--months N` |
+| "Who's in L2?" / "how many tickets did {agent} handle?" | `--list-agents --month` |
 | "Is my setup / connection working?" | `--self-check` |
 
 ## Inputs you need
@@ -59,7 +59,7 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
   and `python-dotenv`, then runs a smoke test). See `SETUP.md`.
 - Run the script by its path from anywhere — it finds `.env` and `qc_reader` next to itself and
   auto-uses the `.venv` setup.sh created. (For local dev in a repo checkout with no creds, it falls
-  back to `data/evaluations.db`, or pass `--sqlite <path>`.)
+  back to `data/evaluations.db`, or pass `--sqlite {path}`.)
 
 ## The fetch script
 
@@ -118,7 +118,7 @@ and `improvements` (scored metrics <4 with a concrete note).
 ## Steps — check-in mode
 
 1. **Confirm the exact agent name(s)** with `--list-agents --month` (names match exactly; watch
-   for variant spellings like "Dimple M K" vs "Dimple MK", or `Agent ID <n>`).
+   for variant spellings like "Dimple M K" vs "Dimple MK", or `Agent ID {n}`).
 2. **Fetch** the agent bundle(s) for the month (`--agent` / `--agent all --group`).
 3. **Read `METHODOLOGY.md`** and write the check-in from it: two sections (**Strengths**,
    **Areas for Development**); translate metrics into observable **behaviors**, not raw scores;
