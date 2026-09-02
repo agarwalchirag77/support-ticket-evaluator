@@ -35,7 +35,7 @@ You need the Snowflake data loaded and the read-only user created. If you follow
    | `SNOWFLAKE_ACCOUNT` | `ab12345.us-east-1` | account locator |
    | `SNOWFLAKE_WAREHOUSE` | `COMPUTE_WH` | |
    | `SNOWFLAKE_DATABASE` | `SUPPORT_ANALYTICS` | |
-   | `SNOWFLAKE_SCHEMA` | `ZENDESK_AUDIT` | |
+   | `SNOWFLAKE_SCHEMA` | `ZENDESK_QC` | |
    | `SNOWFLAKE_READER_USER` | `TICKET_EVALUATOR_READER_USER` | SELECT-only |
    | `SNOWFLAKE_READER_PASSWORD` | *(secret)* | share securely |
 
@@ -63,7 +63,7 @@ and the 6 values above from your admin.
    SNOWFLAKE_ACCOUNT=ab12345.us-east-1
    SNOWFLAKE_WAREHOUSE=COMPUTE_WH
    SNOWFLAKE_DATABASE=SUPPORT_ANALYTICS
-   SNOWFLAKE_SCHEMA=ZENDESK_AUDIT
+   SNOWFLAKE_SCHEMA=ZENDESK_QC
    SNOWFLAKE_READER_USER=TICKET_EVALUATOR_READER_USER
    SNOWFLAKE_READER_PASSWORD=paste-secret-here
    EOF

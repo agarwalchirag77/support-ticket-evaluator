@@ -9,7 +9,7 @@
 
 -- Target the QC schema explicitly (edit if your database/schema differ).
 USE DATABASE SUPPORT_ANALYTICS;
-USE SCHEMA SUPPORT_ANALYTICS.ZENDESK_AUDIT;
+USE SCHEMA SUPPORT_ANALYTICS.ZENDESK_QC;
 
 CREATE TABLE IF NOT EXISTS metric_weights (
     metric_id   VARCHAR PRIMARY KEY,
