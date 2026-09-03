@@ -80,11 +80,28 @@ sudo logrotate --debug /etc/logrotate.d/ticket-evaluator   # dry-run check
 ```
 
 ## 7. Schedule the daily run
+
+**Recommended — systemd timer** (survives reboots; `Persistent=true` runs a missed job on
+next boot; logs to journald):
+```bash
+bash deploy/install_systemd_timer.sh 08:00      # HH:MM, server-local time
+systemctl list-timers ticket-evaluator.timer    # confirm the next run
+sudo systemctl start ticket-evaluator.service    # optional: run once now to test
+journalctl -u ticket-evaluator.service -f        # watch it
+```
+If you previously installed the cron entry, remove it to avoid double runs:
+`bash scripts/setup_cron.sh --remove`.
+
+**Alternative — cron** (simpler, but won't catch up missed runs and the crontab can be lost
+if the instance is replaced):
 ```bash
 # edit CRON_TIME in scripts/setup_cron.sh (default 0 8 * * * = 08:00 server-local), then:
 bash scripts/setup_cron.sh
-crontab -l    # entry should use .venv/bin/python (auto-detected)
+crontab -l                                        # entry should use .venv/bin/python
+systemctl is-enabled cron && systemctl is-active cron   # cron must be enabled AND running
 ```
+The cron path writes stdout to `logs/cron.log`; if that file never appears, the entry never
+fired (check `systemctl is-active cron`, and that the crontab still exists).
 
 ---
 
