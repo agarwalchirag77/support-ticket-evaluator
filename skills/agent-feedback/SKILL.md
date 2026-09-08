@@ -9,7 +9,7 @@ description: >-
   {agent}'s tickets breached SLA", or "show {agent}'s worst tickets". Backed by
   weighted QC scores and per-metric reasoning from the ticket-evaluator QC
   database. Use for "monthly agent feedback", "QC check-in", "performance feedback
-  for {agent}", "team/L1/L2 leaderboard", "who improved or slipped this month",
+  for {agent}", "team leaderboard", "who improved or slipped this month",
   "compare {agent} to the team", "quarter review", "why is this ticket rated low",
   or "what to improve on ticket {id}".
 ---
@@ -32,12 +32,12 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
 
 | The user asks… | Do this |
 |----------------|---------|
-| "Write monthly feedback for {agent}" / "review L1 for June" | **Check-in mode** — fetch the agent bundle(s), write per METHODOLOGY.md |
+| "Write monthly feedback for {agent}" / "review the team for June" | **Check-in mode** — fetch the agent bundle(s), write per METHODOLOGY.md |
 | "Why was ticket 72247 rated low?" / "what can be improved on ticket X?" | **Ticket mode** — `--ticket {id}`, explain from `lowlights` + `improvements` |
 | "Why did {agent} score low on RCA?" / "what's {agent}'s weak spot?" | **Agent mode** — fetch the bundle, read `weakest` + the `low_tickets` reasoning for that metric |
 | "Which of {agent}'s tickets breached SLA / frustrated the customer?" | **Agent mode** — read `flags_pct` and the per-ticket `flags` in `low_tickets` |
 | "Show {agent}'s worst / best tickets this month" | **Agent mode** — `low_tickets` / `best_tickets` |
-| "Rank all of L1 / L2 for June" / "team leaderboard" | **Leaderboard** — `--leaderboard --month [--group]` |
+| "Rank the team for June" / "team leaderboard" | **Leaderboard** — `--leaderboard --month` |
 | "Compare {agent} to the team" / "are they above or below peers?" | **Compare** — `--compare --agent --month` |
 | "Who improved / slipped this month?" | **Changes** — `--changes --month [--group]` |
 | "Review {agent} for Q2" / "last 3 months" | **Range** — `--from-month/--to-month` or `--months N` |
@@ -47,7 +47,8 @@ Never invent numbers, tickets, or reasons: if it isn't in the fetched JSON, don'
 ## Inputs you need
 
 - **Month** — `YYYY-MM` (evaluated on ticket *close* month) — for agent/group questions.
-- **Who / what** — an agent (exact name), a group (`L1` / `L2`), `all`, or a **ticket id**.
+- **Who / what** — an agent (exact name), the whole team (`all`), or a **ticket id**. (All agents are
+  one **L2** cohort now — the former L1 chat team was merged into L2; the `--group` flag is a no-op.)
 
 ## Prerequisites
 
@@ -70,27 +71,27 @@ from this skill folder (`cd` here first, or call it by its full path); it self-s
 # Roster for a month (exact names + counts + group). Run first for any agent question.
 python fetch_qc_data.py --list-agents --month 2026-06
 
-# Agent bundle for a month (add --group L1|L2 to scope, --trend N for prior months).
+# Agent bundle for a month (--trend N for prior months).
 python fetch_qc_data.py --agent "Sthitapragyan Rout" --month 2026-06
 
-# Whole group at once.
-python fetch_qc_data.py --agent all --month 2026-06 --group L1
+# Whole team at once.
+python fetch_qc_data.py --agent all --month 2026-06
 
 # Single-ticket drill-down (for "why rated low" / "what to improve on ticket X").
 python fetch_qc_data.py --ticket 72247
 
-# Team leaderboard for a month (rank a group by weighted score).
-python fetch_qc_data.py --leaderboard --month 2026-06 --group L2
+# Team leaderboard for a month (rank the team by weighted score).
+python fetch_qc_data.py --leaderboard --month 2026-06
 
-# Agent vs their group (per-metric above/below peers).
+# Agent vs the team (per-metric above/below peers).
 python fetch_qc_data.py --compare --agent "Sthitapragyan Rout" --month 2026-06
 
 # Who improved / slipped vs the prior month.
-python fetch_qc_data.py --changes --month 2026-06 --group L1
+python fetch_qc_data.py --changes --month 2026-06
 
 # Quarter / multi-month range (window aggregate + per-month breakdown).
 python fetch_qc_data.py --agent "Sthitapragyan Rout" --from-month 2026-04 --to-month 2026-06
-python fetch_qc_data.py --agent all --months 3 --month 2026-06 --group L1
+python fetch_qc_data.py --agent all --months 3 --month 2026-06
 
 # Verify the connection + narrative data (used by setup.sh).
 python fetch_qc_data.py --self-check

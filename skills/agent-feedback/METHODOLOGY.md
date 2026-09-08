@@ -17,11 +17,16 @@ caveat when scores look low but you know the agent does strong live work.
 
 ## Groups
 
-- **L1** — Chat L1 Support (group `44897999201817`): first-line chat/email.
-- **L2** — General Escalation (group `6338786491161`): deep technical escalations.
+The former **Chat L1 Support** team (group `44897999201817`) was converted to an **L2** team and now
+handles **email** only. Both Zendesk groups — `44897999201817` and General Escalation
+`6338786491161` — are therefore treated as one **L2** cohort; there is no active L1 team. Reports
+compare every agent within this single L2 cohort, so the `--group` flag is now a no-op (kept only so
+older commands don't error). Historical chat tickets from `44897999201817` also report under L2.
 
-Compare an agent to peers **within their own group**; L2 tickets are harder and score
-differently from L1. Use `--group L1|L2` to scope.
+**L2 email SLA is severity-based** (custom field `sev_0`..`sev_4`): FR 30 min (sev_0/1) or 60 min
+(sev_2–4); TTR 12 h / 24 h / 48 h / 72 h / 96 h for sev_0 → sev_4, with the weekend excluded only for
+sev_3/sev_4. These drive METRIC_8 (FRT) and METRIC_10 (TTR), which are **recorded but weight-0** — they
+show up as SLA breach flags and in the per-metric list, but do not move the weighted QC score.
 
 ## Weighting (12 metrics → 100)
 
@@ -112,9 +117,9 @@ When answering "why was ticket X rated low" / "what can be improved on ticket X"
 
 When ranking or comparing across people (`--leaderboard`, `--compare`, `--changes`):
 
-- **Always compare within a group.** L1 (chat) and L2 (escalation) tickets differ in difficulty and
-  score differently — rank L1 against L1 and L2 against L2 (`--group`). A cross-group leaderboard is
-  misleading. `--compare` compares an agent to *their own group's* average.
+- **One L2 cohort now.** Since the L1 team was merged into L2 (email-only), all agents form a single
+  L2 cohort — leaderboards and `--compare` rank/compare every agent against the whole team. (The
+  `--group` flag is a retired no-op.)
 - **Respect ticket volume.** A 3.9 over 4 tickets is thinner evidence than a 3.6 over 40. The tools
   flag `insufficient_data` (< 3 tickets) and always return `n_tickets` — say so rather than ranking a
   1–2 ticket month as if it were settled. Sort confident entries above thin ones.

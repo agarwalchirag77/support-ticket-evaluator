@@ -60,33 +60,49 @@ evaluation:
   prompt_version: "v2"                   # bump this when prompt changes
   skip_if_evaluated: true                # skip tickets already in DB with this prompt_version
   sla:
-    # Optional: Zendesk custom field ID that holds the ticket's severity tier.
-    # If null, falls back to ticket.priority (normal / low / high / urgent).
-    severity_field_id: null
+    # Zendesk custom field ID that holds the ticket's severity tier (values sev_0..sev_4).
+    # Must be a quoted string (compared as str(custom_field.id)). If null, falls back to
+    # ticket.priority (normal / low / high / urgent).
+    severity_field_id: "8415300134041"
     chat:
       default:
         frt_seconds: 30
         ttr_minutes: 120
-      # Priority/severity-based overrides — uncomment and adjust to activate:
-      # urgent:
-      #   frt_seconds: 15
-      #   ttr_minutes: 60
-      # high:
-      #   frt_seconds: 20
-      #   ttr_minutes: 90
+      # Chat (L1) has no per-severity tiers — all chat tickets use the default above.
     email:
+      # L2 (email) SLA depends on ticket severity. TTR is calendar hours except sev_3/sev_4,
+      # where the weekend window (Sat 03:00 → Mon 03:00 IST) is excluded. FR: sev_0/1 = 30m,
+      # sev_2/3/4 = 60m. Tickets with no/unknown severity use `default`.
       default:
         frt_minutes: 30
         ttr_minutes: 2880
         weekend_exclusion: true
         timezone: Asia/Kolkata
-      # Priority/severity-based overrides — uncomment and adjust to activate:
-      # urgent:
-      #   frt_minutes: 15
-      #   ttr_minutes: 1440
-      # high:
-      #   frt_minutes: 20
-      #   ttr_minutes: 2160
+      sev_0:                       # FR 30m / TTR 12h calendar
+        frt_minutes: 30
+        ttr_minutes: 720
+        weekend_exclusion: false
+        timezone: Asia/Kolkata
+      sev_1:                       # FR 30m / TTR 24h calendar
+        frt_minutes: 30
+        ttr_minutes: 1440
+        weekend_exclusion: false
+        timezone: Asia/Kolkata
+      sev_2:                       # FR 1h / TTR 48h calendar
+        frt_minutes: 60
+        ttr_minutes: 2880
+        weekend_exclusion: false
+        timezone: Asia/Kolkata
+      sev_3:                       # FR 1h / TTR 72h, weekend excluded
+        frt_minutes: 60
+        ttr_minutes: 4320
+        weekend_exclusion: true
+        timezone: Asia/Kolkata
+      sev_4:                       # FR 1h / TTR 96h, weekend excluded
+        frt_minutes: 60
+        ttr_minutes: 5760
+        weekend_exclusion: true
+        timezone: Asia/Kolkata
   # FRT/TTR rating breach thresholds
   breach_minor_multiplier: 1.2           # within 20% of threshold = Rating 3 (vs Rating 2)
   reopen_reason_field_id: 47413816539289  # Zendesk field ID for the "Reopen Reason" custom field

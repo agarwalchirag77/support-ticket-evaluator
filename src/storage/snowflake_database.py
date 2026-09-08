@@ -274,6 +274,50 @@ class SnowflakeDatabase:
             (published_at, eval_id),
         )
 
+    def get_latest_evaluations(self, from_date=None, to_date=None) -> list[dict]:
+        """Latest evaluations with the ticket's channel + eval blob path (for SLA re-patch)."""
+        query = """
+            SELECT e.id AS evaluation_id, e.ticket_id, e.eval_json_path, t.channel, t.closed_at
+            FROM evaluations e JOIN tickets t ON t.ticket_id = e.ticket_id
+            WHERE e.is_latest = 1
+        """
+        params: list = []
+        if from_date:
+            query += " AND t.closed_at >= ?"; params.append(from_date)
+        if to_date:
+            query += " AND t.closed_at <= ?"; params.append(to_date + "T23:59:59Z")
+        query += " ORDER BY t.closed_at"
+        return self._query(query, params)
+
+    def update_sla_result(self, eval_id: int, result: EvaluationResult) -> None:
+        """In-place update of SLA-derived fields on an existing evaluation (no re-insert)."""
+        sla = result.sla_status
+        frt = sla.first_response_time if sla else None
+        ttr = sla.resolution_time if sla else None
+        with self._lock:
+            self._execute(
+                """
+                UPDATE evaluations SET aggregate_score=?, performance_band=?,
+                    frt_status=?, frt_minutes=?, ttr_status=?, ttr_minutes=?, flags=?
+                WHERE id=?
+                """,
+                (
+                    result.aggregate_score.numeric if result.aggregate_score else None,
+                    result.aggregate_score.band if result.aggregate_score else None,
+                    frt.status if frt else None, frt.value_minutes if frt else None,
+                    ttr.status if ttr else None, ttr.value_minutes if ttr else None,
+                    json.dumps(result.flags), eval_id,
+                ),
+            )
+            rows = [(str(m.rating), m.rating_label, eval_id, m.metric_id) for m in result.metrics]
+            if rows:
+                cur = self._connection().cursor()
+                cur.executemany(
+                    "UPDATE metric_results SET rating=?, rating_label=? "
+                    "WHERE evaluation_id=? AND metric_id=?",
+                    rows,
+                )
+
     # ------------------------------------------------------------------
     # Purge
     # ------------------------------------------------------------------

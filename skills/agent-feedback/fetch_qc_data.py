@@ -16,7 +16,7 @@ and METHODOLOGY.md).
 
 Usage:
   python skills/agent-feedback/fetch_qc_data.py --agent "Sthitapragyan Rout" --month 2026-06
-  python skills/agent-feedback/fetch_qc_data.py --agent all --month 2026-06 --group L1
+  python skills/agent-feedback/fetch_qc_data.py --agent all --month 2026-06
   python skills/agent-feedback/fetch_qc_data.py --list-agents --month 2026-06
 """
 from __future__ import annotations
@@ -72,7 +72,10 @@ METRIC_NAMES = {
     "METRIC_19": "QC Reopen Reason",
 }
 
-GROUP_IDS = {"L1": 44897999201817, "L2": 6338786491161}
+# Group id → cohort label. The former "Chat L1 Support" team (44897999201817) was converted
+# to an email-only L2 team, so BOTH Zendesk groups now map to L2 — there is no active L1
+# cohort. (Historical chat tickets from 44897999201817 therefore also report as L2.)
+GROUP_LABELS = {44897999201817: "L2", 6338786491161: "L2"}
 LOW_BANDS = {"Poor", "Needs Improvement"}
 GOOD_BANDS = {"Excellent", "Good"}
 LOW_RATING = 2  # ratings <= this are "low"
@@ -138,7 +141,7 @@ def _month_range(from_month: str, to_month: str) -> list[str]:
 def _group_label(group_id) -> str | None:
     if group_id is None:
         return None
-    return next((k for k, v in GROUP_IDS.items() if v == group_id), str(group_id))
+    return GROUP_LABELS.get(group_id, str(group_id))
 
 
 def _group_tickets(rows) -> dict:
@@ -351,7 +354,7 @@ def ticket_detail(rows) -> dict:
         "agent_name": _first_agent(rows),
         "close_month": (t["closed_at"] or "")[:7],
         "closed_at": t["closed_at"],
-        "group": next((k for k, v in GROUP_IDS.items() if v == gid), str(gid)),
+        "group": _group_label(gid),
         "band": t["band"],
         "aggregate_score": t["aggregate_score"],
         "weighted_score": round(_weighted_ticket_score(t["metrics"]), 3)
@@ -482,11 +485,13 @@ def leaderboard(db, months, group_id) -> list:
 
 
 def compare_agent(db, name, month, group_id) -> dict:
-    """Agent-vs-team (same group): per-metric agent avg vs group avg for the month."""
+    """Agent-vs-team: per-metric agent avg vs the team average for the month.
+
+    With the L1→L2 merge there is a single L2 cohort, so when group_id is None the
+    comparison is against ALL agents (the whole team) for the month.
+    """
     agent_rows = db.get_feedback_rows(agent_name=name, month=month, group_id=group_id)
-    if group_id is None:
-        group_id = _dominant_group(agent_rows)
-    team_rows = db.get_feedback_rows(month=month, group_id=group_id)
+    team_rows = db.get_feedback_rows(month=month, group_id=group_id)  # group_id None = all L2
     a, t = analyse(agent_rows), analyse(team_rows)
 
     tmap = {p["metric_id"]: p for p in t["per_metric"]}
@@ -506,7 +511,8 @@ def compare_agent(db, name, month, group_id) -> dict:
     per_metric.sort(key=lambda x: (x["delta"] if x["delta"] is not None else 0))
     aw, tw = a["weighted_score"], t["weighted_score"]
     return {
-        "agent_name": name, "month": month, "group": _group_label(group_id),
+        "agent_name": name, "month": month,
+        "group": _group_label(group_id) or _group_label(_dominant_group(agent_rows)),
         "agent_weighted": aw, "team_weighted": tw,
         "weighted_delta": round(aw - tw, 3) if (aw is not None and tw is not None) else None,
         "agent_n_tickets": a["n_tickets"], "team_n_tickets": t["n_tickets"],
@@ -622,7 +628,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--agent", help="Exact agent name, or 'all' for every agent in the month.")
     ap.add_argument("--month", help="Close month, YYYY-MM.")
-    ap.add_argument("--group", choices=["L1", "L2"], help="Restrict to L1 (Chat) or L2 (Escalation).")
+    ap.add_argument("--group", choices=["L1", "L2"],
+                    help="(Legacy) All agents are one L2 cohort now, so this filter is a no-op; kept "
+                         "so older commands don't break.")
     ap.add_argument("--ticket", type=int,
                     help="Drill into a single ticket: full per-metric ratings + reasoning + "
                          "improvement notes (for 'why was this rated low' / 'what to improve' questions).")
@@ -648,7 +656,8 @@ def main() -> int:
     args = ap.parse_args()
 
     db = make_reader(args.sqlite)
-    group_id = GROUP_IDS.get(args.group) if args.group else None
+    # L1→L2 merge: all agents are a single L2 cohort now, so no group-id filtering.
+    group_id = None
 
     # --- self-check (no month needed) ---
     if args.self_check:

@@ -90,12 +90,12 @@ Rating 1: Multiple concerns unaddressed or customer had to repeat themselves.
 METRIC 8: TIMELY FIRST RESPONSE
 Definition: Did the agent respond to the ticket within the defined SLA for its priority level?
 Look for: Time between the first assignment of the ticket to an agent and the agent's first substantive response (not auto-acknowledgment).
-SLA reference: Use the First Response Time (FRT) threshold defined in the SLA DEFINITIONS section for the ticket's channel (Chat or Email) to determine whether the timeline was met. The threshold is the boundary between Rating 4 (within SLA) and Rating 3/2/1 (outside SLA with varying severity).
-Rating 4: First response within the SLA threshold for this ticket's channel.
+SLA reference: Use the First Response Time (FRT) threshold defined in the SLA DEFINITIONS section for the ticket's channel (Chat or Email) — and, for Email, the ticket's **severity** (sev_0..sev_4). The threshold is the boundary between Rating 4 (within SLA) and Rating 3/2/1 (outside SLA with varying severity).
+Rating 4: First response within the SLA threshold for this ticket's channel/severity.
 Rating 3: First response slightly exceeded SLA (within 20% of threshold) with no proactive communication.
 Rating 2: First response significantly missed SLA without explanation.
 Rating 1: No response or response so delayed it caused escalation.
-Note: Use Ticket assignment timestamp and first agent reply timestamp from metadata. For Email tickets, apply the weekend exclusion rule when calculating elapsed time.
+Note: Use Ticket assignment timestamp and first agent reply timestamp from metadata. FRT is measured in calendar time (no weekend exclusion applies to first response).
 **NOTE: FRT is NOT a binary metric. Use ratings 2 or 3 to distinguish severity of breach before assigning Rating 1. Rating 1 is reserved only for cases with no response or response so delayed it caused documented escalation.**
 ---
 METRIC 9: PROACTIVE UPDATES & FOLLOW-UPS
@@ -110,7 +110,7 @@ N/A: Ticket resolved in first response with no waiting period.
 METRIC 10: RESOLUTION SHARED ON TIME
 Definition: Was the resolution delivered within the committed or defined resolution SLA timeframe?
 Look for: Compare resolution time to: (a) any explicit commitment made in the ticket, (b) the Resolution Time (TTR) threshold from the SLA DEFINITIONS section for the ticket's channel (Chat or Email).
-SLA reference: Use the Resolution Time (TTR) threshold defined in the SLA DEFINITIONS section for the ticket's channel to determine whether the timeline was met. The threshold is the boundary between Rating 4 (within SLA) and Rating 3/2/1 (outside SLA with varying severity). For Email tickets, apply the weekend exclusion rule before comparing against the threshold.
+SLA reference: Use the Resolution Time (TTR) threshold defined in the SLA DEFINITIONS section for the ticket's channel — and, for Email, the ticket's **severity** (sev_0..sev_4). The threshold is the boundary between Rating 4 (within SLA) and Rating 3/2/1 (outside SLA with varying severity). For Email **sev_3 / sev_4** tickets, apply the weekend exclusion rule before comparing; sev_0/sev_1/sev_2 use pure calendar time (no exclusion).
 Rating 4: Resolution delivered within the SLA threshold or any explicit commitment made in the ticket.
 Rating 3: Resolution slightly delayed; agent proactively communicated the delay.
 Rating 2: Resolution missed timeline; no proactive communication of delay.
@@ -302,36 +302,49 @@ Definition: Time elapsed from ticket assignment to the agent's first reply.
 
 How to calculate: Same method as Chat FRT above — prefer manual calculation using `assigned_at` (first assignment to agent) → first agent reply timestamp. Only fall back to `reply_time_in_seconds` if `assigned_at` is null, and flag in confidence_note that the Zendesk field measures from ticket creation, not assignment.
 
-Threshold: ≤ 30 minutes
+Threshold (by ticket severity — from the `sev_N` tag / severity field):
+  - sev_0, sev_1: ≤ 30 minutes
+  - sev_2, sev_3, sev_4: ≤ 60 minutes
+  - Unknown severity: ≤ 30 minutes (default)
+FRT is calendar time — no weekend exclusion.
 N/A condition: `reply_time_in_seconds` is null AND no agent reply can be reliably identified.
 
 ---
 
 SLA 2: RESOLUTION TIME (TTR)
 
-Definition: Total business-hours time elapsed from ticket assignment to the ticket reaching its final solved state. Weekend non-business hours are excluded (see Weekend Exclusion Rule below).
+Definition: Time elapsed from ticket assignment to the ticket reaching its final solved state, measured against a **severity-based** target. For **sev_3 and sev_4** the weekend window is excluded (see Weekend Exclusion Rule); for **sev_0 / sev_1 / sev_2** TTR is pure **calendar** time (no exclusion).
 
 How to calculate:
-  - PREFERRED: Use `full_resolution_time_in_minutes` from Ticket_Metrics, then subtract any weekend gap that falls within the elapsed window (see Weekend Exclusion Rule).
-  - FALLBACK: Calculate (solved_at − assigned_at) in minutes, then subtract any weekend gap.
+  - PREFERRED: Use `full_resolution_time_in_minutes → calendar` from Ticket_Metrics.
+  - For **sev_3 / sev_4 only**, subtract any weekend gap that falls within the elapsed window (see Weekend Exclusion Rule).
+  - FALLBACK: Calculate (solved_at − assigned_at) in minutes (then the weekend adjustment for sev_3/sev_4).
   - If both sources are null, mark TTR as N/A with note: "Ticket not yet resolved — TTR cannot be calculated."
 
-Threshold: ≤ 2,880 minutes (48 hours) — BUSINESS HOURS ONLY after weekend exclusion.
+Threshold (by ticket severity):
+  - sev_0: ≤ 720 minutes (12 hours, calendar)
+  - sev_1: ≤ 1,440 minutes (24 hours, calendar)
+  - sev_2: ≤ 2,880 minutes (48 hours, calendar)
+  - sev_3: ≤ 4,320 minutes (72 hours, weekend excluded)
+  - sev_4: ≤ 5,760 minutes (96 hours, weekend excluded)
+  - Unknown severity: ≤ 2,880 minutes (48 hours, weekend excluded) — default
 N/A condition: Ticket is not yet solved and no solved_at timestamp exists.
+
+Note: The QC system authoritatively recomputes the FRT/TTR ratings from this severity config after evaluation — still give your best estimate and reasoning; the final Rating for METRIC 8 / METRIC 10 may be set by the system.
 
 ---
 
-WEEKEND EXCLUSION RULE (Email tickets only):
+WEEKEND EXCLUSION RULE (Email **sev_3 / sev_4** tickets only):
 
-The period from Saturday 03:00 AM IST to Monday 03:00 AM IST is non-business time and MUST be excluded from Email Resolution Time (TTR). This window is exactly 48 hours (2,880 minutes).
+The period from Saturday 03:00 AM IST to Monday 03:00 AM IST is non-business time and MUST be excluded from Resolution Time (TTR) **for sev_3 and sev_4 tickets only**. This window is exactly 48 hours (2,880 minutes). For sev_0 / sev_1 / sev_2, do NOT apply any deduction — use pure calendar time.
 
-How to apply:
+How to apply (sev_3 / sev_4):
 1. Convert all timestamps to IST (UTC+5:30).
 2. Determine whether the elapsed window between ticket assignment and resolution spans across Saturday 03:00 AM IST.
 3. If the window spans the weekend boundary:
-     Business TTR = (total calendar minutes) − 2,880 minutes
-4. If the window does NOT span Saturday 03:00 AM IST (e.g., ticket created and resolved entirely within Mon–Fri business week, or created and resolved entirely within the weekend window), no deduction is applied.
-5. Use the adjusted Business TTR to evaluate against the 48-hour threshold.
+     Adjusted TTR = (total calendar minutes) − 2,880 minutes  (per weekend spanned)
+4. If the window does NOT span Saturday 03:00 AM IST, no deduction is applied.
+5. Use the adjusted TTR to evaluate against the severity threshold (72h / 96h).
 
 Examples:
   Example A (breached after adjustment):
