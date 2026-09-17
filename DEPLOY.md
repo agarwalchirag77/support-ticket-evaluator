@@ -141,6 +141,17 @@ fired (check `systemctl is-active cron`, and that the crontab still exists).
 7. **Cron fires:** set `CRON_TIME` ~2 min ahead, `bash scripts/setup_cron.sh`, wait, check
    `tail logs/cron.log` + a fresh Snowflake `runs` row. Reset `CRON_TIME` to the real slot and re-run.
 
+## Redeploying after a change
+Pull the latest code and refresh in one step:
+```bash
+bash deploy/update.sh          # git pull --autostash + pip install if requirements changed
+bash deploy/update.sh --run    # ...and trigger a pipeline run now to verify
+```
+The pipeline is a scheduled batch job (each timer fire launches a fresh `python src/main.py run`),
+so **code/config changes take effect on the next run automatically — no restart needed.** A restart
+only matters if `deploy/install_systemd_timer.sh` (the unit definition) changed; `update.sh` prints
+the exact re-apply command when that happens.
+
 ## Querying in Snowflake
 ```sql
 -- run history: when, window covered, counts, failures
