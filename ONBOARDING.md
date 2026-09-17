@@ -92,7 +92,48 @@ cp .env.example .env          # fill in ZENDESK_*, one LLM key; SNOWFLAKE_* only
 
 ---
 
-## 5. Deployment (remote server)
+## 5. Deployment
+
+### 5a. Deploying a change (the everyday flow)
+
+The remote box (`ubuntu@…:~/QC_agent/support-ticket-evaluator`) is a normal clone. Deploying a change =
+push to `main`, then pull on the VM. **Nothing to restart** for ordinary code/config changes — the
+pipeline is a scheduled batch (each run launches a fresh `python src/main.py run`), so the next run picks
+up new code automatically.
+
+1. **Local:** make the change, test (`arch -arm64 python3 src/main.py status`, run the skill selftest if
+   relevant), then commit and push:
+   ```bash
+   git add -A && git commit -m "…"
+   git push origin main
+   ```
+2. **On the VM:** pull + refresh + verify with the helper:
+   ```bash
+   cd ~/QC_agent/support-ticket-evaluator
+   bash deploy/update.sh --run     # git pull --autostash, pip install if reqs changed, run now, show status
+   ```
+   > First time only (before `update.sh` exists on the box): `git pull --autostash origin main` by hand,
+   > then use `deploy/update.sh` for every future deploy.
+3. **Verify:** `deploy/update.sh` prints `status` at the end; also watch the run with
+   `journalctl -u ticket-evaluator.service -f`, confirm a fresh `runs` row in Snowflake, and spot-check a
+   ticket's QC fields in Zendesk.
+
+**Change-specific follow-ups** (run on the VM after the pull):
+
+| You changed… | Extra step |
+|--------------|-----------|
+| SLA thresholds / severity (`config.yaml`) | `python scripts/repatch_sla.py --from YYYY-MM-DD --execute` to fix history (no LLM) |
+| Prompt **with** a `prompt_version` bump | next `run` re-evaluates everything (LLM cost) — expected |
+| Prompt **without** a version bump | only new tickets get the new prompt; no backfill |
+| `requirements.txt` | `update.sh` installs it automatically |
+| `zendesk.exclusions` | applies on next run; purge already-scored ones with `python src/main.py purge-excluded --execute` |
+| The **feedback skill** (`skills/agent-feedback/`) | `bash scripts/make-skill-bundle.sh` and reshare to teammates |
+| `deploy/install_systemd_timer.sh` (unit definition) | `bash deploy/install_systemd_timer.sh 08:00` (re-applies + reloads) |
+
+Roll back a bad deploy: `git reset --hard <good-sha> && bash deploy/update.sh` (data is untouched — it
+lives in Snowflake + `data/`).
+
+### 5b. First-time server provisioning (once)
 
 Full runbook: **[DEPLOY.md](DEPLOY.md)**. Summary:
 
